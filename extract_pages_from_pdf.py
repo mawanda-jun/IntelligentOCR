@@ -1,6 +1,4 @@
-from wand.image import Image as wImage
-from wand.image import Color as wColor
-from PIL import Image as Image
+from PIL import Image
 from alyn import deskew
 import io
 import os
@@ -12,6 +10,7 @@ import pyprind
 import sys
 import glob
 from threading import Thread
+from pdf2image import convert_from_path, convert_from_bytes
 
 # import argparse
 #
@@ -53,38 +52,49 @@ def extract_pages(file_path):
 	# 	.replace('..\\pdf\\', '', 1) \
 	# 	.replace('\\', '/')
 
-	req_image = []
-
 	# wand converts all the separate pages into separate image blobs
 	print('Generating images from PDF...')
-	all_pages = wImage(filename=file_path, resolution=300)
+	# all_pages = wImage(filename=file_path, resolution=300)
+	all_pages = convert_from_path(
+		pdf_path=file_path,
+		dpi=200,
+		fmt='jpeg',
+		thread_count=2
 
+	)
 	# print('Processing images...')
-	bar = pyprind.ProgPercent(len(all_pages.sequence) * 2, track_time=True, title='Processing images...', stream=sys.stdout)
+	bar = pyprind.ProgPercent(len(all_pages), track_time=True, title='Processing images...', stream=sys.stdout)
 
-	for i, page in enumerate(all_pages.sequence):
-		with wImage(page) as img:
-			img.background_color = wColor('white')
-			img.alpha_channel = 'remove'
-			img.type = 'grayscale'
-			# img.format = 'jpeg'
-			img.convert('jpeg')
-			# img.save(filename='PDFs/polizza/prova' + str(i) + '.jpeg')
-			req_image.append(img.make_blob('jpeg'))
-			bar.update()
+	# for i, page in enumerate(all_pages.sequence):
+	# 	with wImage(page) as img:
+	# 		img.background_color = wColor('white')
+	# 		img.alpha_channel = 'remove'
+	# 		img.type = 'grayscale'
+	# 		# img.format = 'jpeg'
+	# 		img.convert('jpeg')
+	# 		# img.save(filename='PDFs/polizza/prova' + str(i) + '.jpeg')
+	# 		req_bw_image.append(img.make_blob('jpeg'))
+	# 		bar.update()
+	req_bw_image = []
+	for page in all_pages:
+		pg = page.convert(
+			'L'
+		)
+		req_bw_image.append(pg)
+	# req_bw_image = all_pages
 
-	# append all the blobs into req_image
+	# append all the blobs into req_bw_image
 	# for img in image_jpeg.sequence:
 	# 	img_page = wImage(image=img)
 	# 	img_page.type = 'grayscale'
-	# 	req_image.append(img_page.make_blob('jpeg'))
+	# 	req_bw_image.append(img_page.make_blob('jpeg'))
 
 	image_pages = []
 
 	counter = 0
 	# run beautifier over image blobs
-	for img in req_image:
-		with Image.open(io.BytesIO(img)) as image:
+	for image in req_bw_image:
+		# with Image.open(io.BytesIO(img)) as image:
 			# image.convert('LA')
 
 			counter = counter + 1
@@ -150,7 +160,7 @@ for file in glob.iglob("..\\Polizze\\" + '/**/*.pdf', recursive=True):
 	else:
 		pathList2.append(pdfPath)
 	counter = counter+1
-
+	# pathList1.append(pdfPath)
 
 thread1 = MyThread("Thread1", pathList1)
 thread2 = MyThread("Thread2", pathList2)
