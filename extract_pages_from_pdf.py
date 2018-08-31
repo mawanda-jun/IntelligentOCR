@@ -1,16 +1,19 @@
 from PIL import Image
 from alyn import deskew
-import io
 import os
 import errno
 import numpy as np
 import shutil
 import cv2
-import pyprind
-import sys
-import glob
-from threading import Thread
-from pdf2image import convert_from_path, convert_from_bytes
+from pdf2image import convert_from_path
+import logging
+from logger import return_handler
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+logger.addHandler(return_handler())
+# logger.info('Hello baby')
 
 # import argparse
 #
@@ -19,157 +22,145 @@ from pdf2image import convert_from_path, convert_from_bytes
 # args = parser.parse_args()
 
 
-class MyThread (Thread):
-	def __init__(self, name, path):
-		Thread.__init__(self)
-		self.name = name
-		self.path = path
-
-	def add_path(self, path):
-		if self.path[0] == '':
-			self.path.append(path)
-		else:
-			self.path = [path]
-
-	def run(self):
-		for file_path in self.path:
-			extract_pages(file_path)
-
-
-def extract_pages(file_path):
-	print('Now processing: ' + file_path)
-	file_name = os.path.splitext(file_path)[0] \
-		.split("\\")[-1]
-	if os.path.isdir('PDFs/' + str(file_name)):
-		shutil.rmtree('PDFs/' + str(file_name), ignore_errors=True)
+def clear_and_create_create_temp_folders(file_name, temp_path='temp'):
+	logger.info('Clear and create temp file for images from pdf')
 	try:
-		os.mkdir('PDFs/' + str(file_name))
+		os.mkdir(temp_path)
+		logger.info('Folder created successfully')
 	except OSError as exc:  # Guard against race condition
 		if exc.errno != errno.EEXIST:
+			logger.warning('Parent folder was not created correctly. Probably already present')
 			raise
 
-	# folder_path = file_path.replace(file_name + '.pdf', '') \
-	# 	.replace('..\\pdf\\', '', 1) \
-	# 	.replace('\\', '/')
+	if os.path.isdir(os.path.join(temp_path, str(file_name))):
+		logger.info('Deleting not empty temp folder')
+		shutil.rmtree(os.path.join(temp_path, str(file_name)), ignore_errors=True)
+	try:
+		os.mkdir(os.path.join(temp_path, str(file_name)))
+		logger.info('Subfolder of parent created successfully')
+	except OSError as exc:  # Guard against race condition
+		if exc.errno != errno.EEXIST:
+			logger.warning('Child folder was not created correctly. Probably already present')
+			raise
 
-	# wand converts all the separate pages into separate image blobs
-	print('Generating images from PDF...')
+
+def write_image_on_temp_file(file_name, image_np, counter=0, temp_path='temp'):
+	logger.info('Writing temp images on disk...')
+	image_filename = os.path.join(str(file_name), '_page_' + str(counter) + '.jpeg')
+	cv2.imwrite(
+		filename=os.path.join(temp_path, image_filename),
+		img=image_np
+	)
+	logger.info('Image_ ' + str(counter) + 'wrote on disk')
+
+
+def from_pdf_to_pil_list_images(file_path):
+	# print('Generating images from PDF...')
+	logger.info('Generating images from PDF...')
 	# all_pages = wImage(filename=file_path, resolution=300)
 	all_pages = convert_from_path(
 		pdf_path=file_path,
-		dpi=200,
+		dpi=100,
 		fmt='jpeg',
 		thread_count=2
-
 	)
-	# print('Processing images...')
-	bar = pyprind.ProgPercent(len(all_pages), track_time=True, title='Processing images...', stream=sys.stdout)
-
-	# for i, page in enumerate(all_pages.sequence):
-	# 	with wImage(page) as img:
-	# 		img.background_color = wColor('white')
-	# 		img.alpha_channel = 'remove'
-	# 		img.type = 'grayscale'
-	# 		# img.format = 'jpeg'
-	# 		img.convert('jpeg')
-	# 		# img.save(filename='PDFs/polizza/prova' + str(i) + '.jpeg')
-	# 		req_bw_image.append(img.make_blob('jpeg'))
-	# 		bar.update()
-	req_bw_image = []
+	logger.info('All pages converted from pdf')
+	bw_pil_list = []
+	logger.info('Converting images in greyscale...')
 	for page in all_pages:
 		pg = page.convert(
-			'L'
+			mode='L'
 		)
-		req_bw_image.append(pg)
-	# req_bw_image = all_pages
+		bw_pil_list.append(pg)
+		logger.info('Page converted in greyscale and appended to returning list')
+	return bw_pil_list
 
-	# append all the blobs into req_bw_image
-	# for img in image_jpeg.sequence:
-	# 	img_page = wImage(image=img)
-	# 	img_page.type = 'grayscale'
-	# 	req_bw_image.append(img_page.make_blob('jpeg'))
 
-	image_pages = []
-
+def beautify_pages(bw_pil_list, create_temp_folder=False, temp_path='temp', file_name=None):
+	"""
+	Do some modifications to the pil list to make recognition work better
+	:param bw_pil_list:
+	:param create_temp_folder:
+	:param temp_path:
+	:param file_name:
+	:return:
+	"""
+	logger.info('Making pages looks better for recognition...')
 	counter = 0
 	# run beautifier over image blobs
-	for image in req_bw_image:
-		# with Image.open(io.BytesIO(img)) as image:
-			# image.convert('LA')
+	pil_beautified_images = []
+	for image in bw_pil_list:
+		counter = counter + 1
+		image_np = np.asarray(image)
+		beautified_image_np = beautify_image(image_np)
+		pil_beautified_images.append(Image.fromarray(beautified_image_np))
 
-			counter = counter + 1
-			image_np = np.asarray(image)
-			beautified_image_np = beautify_image(image_np)
+		if create_temp_folder:
+			logger.info('Creating temp files...')
+			write_image_on_temp_file(file_name, beautified_image_np, counter, temp_path)
+			logger.info('Temp files created.')
 
-			# image_pages.append(beautified_image_np)
-			image_filename = str(file_name) + '_page_' + str(counter) + '.jpeg'
-			cv2.imwrite(
-				filename=os.path.join('PDFs', file_name, image_filename),
-				img=beautified_image_np
-			)
-			bar.update()
-
-			# txt = pytesseract.image_to_string(beautified_image, config=config)
-			# final_text.append(txt)
-
-	# counter = 0
-	# for image_np in image_pages:
-	# 	counter = counter + 1
-	# 	#  write the output file
-		# image_filename = str(file_name) + 'page' + str(counter) + '.png'
-		# cv2.imwrite(
-		# 	filename=os.path.join('PDFs', file_name, image_filename),
-		# 	img=image_np
-		# )
-
-	# print(final_text)
-	# with open(write_path, 'w', encoding='utf-8') as result:
-	# 	for line in final_text:
-	# 		result.write(line)
-	# print(line)
+	return pil_beautified_images
 
 
-def beautify_image(array_image):
-	# threshold = cv2.threshold(array_image, 150, 255, cv2.THRESH_BINARY)[1]
+def beautify_image(np_array_image):
+	"""
+	Do some modifications to images
+	:param np_array_image:
+	:return: np_array_image
+	"""
+	logger.info('Beautifying images...')
+	# threshold = cv2.threshold(np_array_image, 150, 255, cv2.THRESH_BINARY)[1]
 	# threshold = cv2.medianBlur(threshold, 3)
 	#
-	# threshold = cv2.adaptiveThreshold(array_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 25, 8)
-
+	# threshold = cv2.adaptiveThreshold(np_array_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 25, 8)
+	# deskewing images:
+	logger.info('Doing deskew...')
 	sd = deskew.Deskew(
-		input_numpy=array_image,
+		input_numpy=np_array_image,
 		output_numpy=True
 	)
 	de_skewed_image_np = sd.run()
+	logger.info('Deskew done.')
 	to_return = de_skewed_image_np
+	logger.info('Image beautified.')
 	return to_return
 
 
-# extract_pages(os.path.join('PDFs', 'polizza.pdf'))
-# os.mkdir('PDFs/' + 'ciao')
-# extract_pages(args.pdf_path)
+def generate_pil_images_from_pdf(file_path, create_temp_folder=False, temp_path='temp'):
+	"""
+	Takes a pdf file and convert it to jpeg bw images. create_temp_folder decide to write images to temp_path path.
+	:param file_path: /path/to/pdf.pdf
+	:param create_temp_folder: True/False. For development use. Using pillow images in a pipeline it is not needed
+	:param temp_path: /path/to/tempfiles. It is not deleted automatically
+	:return: pillow images list of betterified images of pdf
+	"""
+	file_name = os.path.splitext(file_path)[0] \
+		.split("\\")[-1]
+	if create_temp_folder:
+		logger.info('Creating temp folder...')
+		clear_and_create_create_temp_folders(file_name)
+		logger.info('Temp folder created')
+	bw_pil_list = from_pdf_to_pil_list_images(file_path)
+	# bar = pyprind.ProgPercent(len(bw_pil_list), track_time=True, title='Processing images...', stream=sys.stdout)
+	# bar.update()
+	bw_beautified_pil_list = beautify_pages(
+		bw_pil_list=bw_pil_list,
+		create_temp_folder=create_temp_folder,
+		temp_path=temp_path,
+		file_name=file_name
+	)
+	logging.info('Extraction of pages from pdf completed')
+	return bw_beautified_pil_list
 
-pathList1 = []
-pathList2 = []
-counter = 0
-# for file in os.listdir("pdf/"):
-for file in glob.iglob("..\\Polizze\\" + '/**/*.pdf', recursive=True):
-	# if file.endswith(".pdf"):
-	pdfPath = os.path.join(file)
-	if counter % 2 == 0:
-		pathList1.append(pdfPath)
-	else:
-		pathList2.append(pdfPath)
-	counter = counter+1
-	# pathList1.append(pdfPath)
 
-thread1 = MyThread("Thread1", pathList1)
-thread2 = MyThread("Thread2", pathList2)
 
-thread1.start()
-thread2.start()
+# file_path='C:\\Users\\giova\\Documents\\PycharmProjects\\Polizze\\glossario.pdf'
+#
+# generate_pil_images_from_pdf(
+# 	file_path=file_path,
+# 	create_temp_folder=True,
+# 	temp_path='temp'
+# )
 
-thread1.join()
-thread2.join()
-
-print("extraction completed")
 

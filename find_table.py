@@ -5,25 +5,34 @@ import errno
 import glob
 import tensorflow as tf
 from PIL import Image
+import logging
+from logger import return_handler
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
-# from object_detection.utils import label_map_util
-# from object_detection.utils import visualization_utils as vis_util
+logger.addHandler(return_handler())
 
 
 def reshape_image_into_numpy_array(pil_image):
 	"""
+	The neural network needs a numpy RGB 3-channels image (because of the pre-trained network)
+	So we need to convert a pillow image into a numpy uint8 heigth*width*3 array
+	We cannot use zero instead of the two additional layers because the NN uses every channel to make predictions,
+	so if we fill the array with zeros the scores become 1/3.
 
 	:param pil_image: a pillow image
 	:return: a reshaped numpy image ready for inference
 	"""
+	logger.info('Converting pillow image in numpy 3-dimension array...')
 	(im_width, im_height) = pil_image.size
 	# print(im_width)
-	zeros = np.zeros((im_height, im_width, 2))
 	# return np.array(pil_image.getdata()).reshape(
 	# 	(im_height, im_width, 1)).astype(np.uint8)
 	np_array = np.array(pil_image.getdata()).reshape((im_height, im_width, 1)).astype(np.uint8)
+	logger.info('Pillow image converted in heigth*width*1 numpy image')
 	np_array = np.concatenate((np_array, np_array, np_array), axis=2)
+	logger.info('Numpy 3-dimension array created')
 	return np_array
 
 
@@ -35,7 +44,7 @@ def do_inference_with_graph(pil_image, inference_graph_path):
 	:param inference_graph_path:
 	:return: (boxes, scores), two lists with all the boxes and their likelihood scores
 	"""
-
+	logger.info('Reading inference graph...')
 	detection_graph = tf.Graph()
 
 	with detection_graph.as_default():
@@ -47,7 +56,7 @@ def do_inference_with_graph(pil_image, inference_graph_path):
 
 	with detection_graph.as_default():
 		with tf.Session(graph=detection_graph) as sess:
-			pil_image.convert(mode='RGB')
+			# pil_image.convert(mode='RGB')
 			# the array based representation of the image will be used later in order to prepare the
 			# result image with boxes and labels on it.
 			image_np = reshape_image_into_numpy_array(pil_image)
@@ -62,21 +71,73 @@ def do_inference_with_graph(pil_image, inference_graph_path):
 			classes = detection_graph.get_tensor_by_name('detection_classes:0')
 			num_detections = detection_graph.get_tensor_by_name('num_detections:0')
 			# Actual detection.
+			logger.info('Running inference...')
 			(boxes, scores, classes, num_detections) = sess.run(
 				[boxes, scores, classes, num_detections],
 				feed_dict={image_tensor: image_np_expanded})
-
+			logger.info('Inference run, boxes and scores have been found')
 			return boxes[0], scores[0]
 
 
 def check_if_intersected(coord_a, coord_b):
 	"""
-	Check if the rectangular b is not intersecated with a
+	Check if the rectangular b is not intersected with a
 	:param coord_a: dict with {y_min, x_min, y_max, x_max}
 	:param coord_b: same as coord_a
-	:return: true if inside, false if outside
+	:return: true if intersected, false instead
 	"""
-	return coord_a['x_max'] > coord_b['x_min'] and coord_a['x_min'] < coord_b['x_max'] and coord_a['y_max'] > coord_b['y_min'] and coord_a['y_min'] < coord_b['x_max']
+	logger.info('Returning if the two boxes are intersected...')
+	return \
+		coord_a['x_max'] > coord_b['x_min'] and \
+		coord_a['x_min'] < coord_b['x_max'] and \
+		coord_a['y_max'] > coord_b['y_min'] and \
+		coord_a['y_min'] < coord_b['x_max']
+
+
+def check_if_vertically_overlapped(coord_a, coord_b):
+	"""
+	Return if coord_b is intersected vertically with coord_a in:
+	top_b, bottom_b, b includes a, a includes b
+	:param coord_a:
+	:param coord_b:
+	:return: true if intersected, false instead
+	"""
+	return \
+		coord_a['y_min'] <= coord_b['y_min'] <= coord_a['y_max'] or \
+		coord_a['y_min'] <= coord_b['y_max'] <= coord_a['y_max'] or \
+		(coord_a['y_min'] > coord_b['y_min'] and coord_a['y_max'] < coord_b['y_max']) or \
+		(coord_a['y_min'] < coord_b['y_min'] and coord_a['y_max'] > coord_b['y_max'])
+
+
+def merge_vertically_overlapping_boxes(boxes):
+	logger.info('Merging vertical overlapping boxes...')
+	merged_boxes = [boxes[0]]
+	for i in range(len(boxes)-1):
+		coord_a = {
+			'y_min': boxes[i-1][0],
+			'x_min': boxes[i-1][1],
+			'y_max': boxes[i-1][2],
+			'x_max': boxes[i-1][3]
+		}
+		coord_b = {
+			'y_min': boxes[i][0],
+			'x_min': boxes[i][1],
+			'y_max': boxes[i][2],
+			'x_max': boxes[i][3]
+		}
+		if \
+		coord_a['x_max'] > coord_b['x_min'] and \
+		coord_a['x_min'] < coord_b['x_max'] and \
+		coord_a['y_max'] > coord_b['y_min'] and \
+		coord_a['y_min'] < coord_b['x_max']:
+			logger.info('Box is overlapping vertically with previous. Merging tables')
+			if boxes[i-1][0] > boxes[i][0]:
+				boxes[i-1][0] = boxes[i][0]
+			if boxes[i-1][2] < boxes[i][2]:
+				boxes[i-1][2] = boxes[i][2]
+			merged_boxes = merge_vertically_overlapping_boxes(merged_boxes)
+	logger.info('Boxes merged successfully')
+	return merged_boxes
 
 
 def keep_best_boxes(boxes, scores, max_num_boxes=5, min_score=0.8):
@@ -95,11 +156,14 @@ def keep_best_boxes(boxes, scores, max_num_boxes=5, min_score=0.8):
 	kept_boxes = []  # always keep the firs box, which is the best one.
 	num_boxes = 0
 	i = 0
+	logger.info('Checking if there are boxes in page...')
 	if scores[0] > min_score:
+		logger.info('Boxes found.')
 		kept_boxes.append(boxes[0])
 		kept_scores.append(scores[0])
 		num_boxes += 1
 		i += 1
+		logger.info('Checking if there are other boxes...')
 		for b in boxes[1:]:
 			if num_boxes < max_num_boxes and scores[i] > min_score:
 				flag = True
@@ -121,29 +185,31 @@ def keep_best_boxes(boxes, scores, max_num_boxes=5, min_score=0.8):
 						coord_a=coord_b,
 						coord_b=coord_kb
 					)
-
 				if flag:
+					logger.info('Box is not overlapping')
+					logger.info('New box found, appending to list.')
 					kept_boxes.append(b)
 					num_boxes += 1
 					kept_scores.append(scores[i])
+
 				i += 1
 			else:
 				break
-
 		# print(str(i) + '\tbox(es) found\nBest score(s):\t', *kept_scores, sep='\n')
-		print(str(i) + '\tbox(es) found')
-		for box in kept_boxes:
-			print('Box\t')
-			print(box)
-		for score in kept_scores:
-			print('Score:\t')
-			print(score)
-
+		# print(str(i) + '\tbox(es) found')
+		# for box in kept_boxes:
+		# 	print('Box\t')
+		# 	print(box)
+		# for score in kept_scores:
+		# 	print('Score:\t')
+		# 	print(score)
+		kept_boxes = merge_vertically_overlapping_boxes(kept_boxes)
 	else:
+		logger.info('No boxes found in page')
 		kept_boxes = []
-		print('No boxes found\nBest score:\t' + str(scores[0]))
+		# print('No boxes found\nBest score:\t' + str(scores[0]))
 
-	return kept_boxes
+	return kept_boxes, kept_scores
 
 
 def crop_image(pil_image, boxes):
@@ -154,25 +220,37 @@ def crop_image(pil_image, boxes):
 
 
 def crop_wide(pil_image, boxes):
+	"""
+	Crop tables from images. To simplify cropping (and to reduce by half the risk of mistake as we consider only two bounds)
+	we cut the image widely from the upper bound to the lower. Then creates a image for table and stores into a list
+	and parses every remaining text box into one image.
+	If no boxes are found only the text image is returned and is equal to pil_image
+	:param pil_image: an image in which some table have been found.
+	:param boxes: bounding boxes for tables
+	:return: pillow list of cropped tables images, pillow image of text.
+	"""
 	cropped_tables = []
 	segments = [0]  # adding position 0 to simplify anti-crop text later
 	height_of_crops = 0
+	logger.info('Checking if there are some boxes recorded...')
 	if not boxes == []:
 		(im_width, im_height) = pil_image.size
 
+		logger.info('Boxes have been found. Cropping tables...')
 		for box in boxes:
 			cropped_tables.append(pil_image.crop(tuple((0, int(box[0]), im_width, int(box[2])))))
 			segments.append(int(box[0]))
 			segments.append(int(box[2]))
 			height_of_crops += (int(box[2]) - int(box[0]))
-
-		# sorts all segments for their
-		segments.append(im_height)  # adding last position to simplyfy anti-crop text later
+		logger.info('Tables cropped')
+		# sorts all segments to simplify anti-crop text later
+		segments.append(im_height)  # adding last position to simplify anti-crop text later
 		segments.sort()
 
 		# create new image with new dimension
 		new_image = Image.new('L', (im_width, im_height - height_of_crops))
 		start_position = 0
+		logger.info('Creating image from cropped text slices...')
 		# cutting image in anti-boxes position
 		for i in range(len(segments)):  # segments will always be even
 			if not i % 2 and i < len(segments) - 1:  # takes only even positions
@@ -180,29 +258,37 @@ def crop_wide(pil_image, boxes):
 					start_position += segments[i-1] - segments[i-2]
 				new_image.paste(pil_image.crop(tuple((0, segments[i], im_width, segments[i+1]))), (0, start_position))
 		cropped_text = new_image
+		logger.info('Created text image')
+
 	else:
+		logger.info('No boxes found')
 		cropped_text = pil_image
 
 	return cropped_tables, cropped_text
 
 
-def extract_tables_and_text(image_path, inference_graph_path):
+def extract_tables_and_text(pil_image, inference_graph_path):
 	"""
 	Extracts tables and text from image_path using inference_graph_path
 
-	:param image_path:
+	:param pil_image:
 	:param inference_graph_path:
 	:return: (cropped_tables, cropped_text), list of table pillow images and a text image
 	"""
-	pil_image = Image.open(image_path)
 	(im_width, im_height) = pil_image.size
 	boxes, scores = do_inference_with_graph(pil_image, inference_graph_path)
-	best_boxes = keep_best_boxes(
+	best_boxes, best_scores = keep_best_boxes(
 		boxes=boxes,
 		scores=scores,
 		max_num_boxes=5,
 		min_score=0.4
 	)
+	logger.info("Best boxes are: ")
+	for box in best_boxes:
+		logger.info(box)
+	logger.info("With scores:")
+	for score in best_scores:
+		logger.info(score)
 
 	# create coordinates based on image dimension
 	for box in best_boxes:
@@ -215,76 +301,105 @@ def extract_tables_and_text(image_path, inference_graph_path):
 	return cropped_tables, cropped_text
 
 
-def clear_and_create_folders(file_name):
+def clear_and_create_temp_folders(file_name, temp_table_folder='table', temp_text_folder='text'):
 	"""
 	Clear any existing table/file_name and text/file_name folder for creating new images
 
 	:param file_name:
+	:param temp_table_folder:
+	:param temp_text_folder:
 	:return: None
 	"""
-	if not os.path.isdir('tables/'):
+	logger.info('Clear and create temp file for images from pdf')
+	if not os.path.isdir(temp_table_folder):
 		# creates folder for table images per page
 		try:
-			os.mkdir('tables')
+			os.mkdir(temp_table_folder)
+			logger.info(temp_table_folder + ' folder created successfully')
 		except OSError as exc:
 			if exc.errno != errno.EEXIST:
+				logger.warning(temp_table_folder + ' folder was not created correctly. Probably already present')
 				raise
 
 	# creates folder for text images per page
-	if not os.path.isdir('text/'):
+	logger.info(temp_text_folder + ' folder created successfully')
+	if not os.path.isdir(temp_text_folder):
 		try:
-			os.mkdir('text')
+			os.mkdir(temp_text_folder)
 		except OSError as exc:
+			logger.info(temp_text_folder + ' folder was not created correctly. Probably already present')
 			if exc.errno != errno.EEXIST:
 				raise
 
-	if os.path.isdir('tables/' + str(file_name)):
-		shutil.rmtree('tables/' + str(file_name), ignore_errors=True)
-	if os.path.isdir('text/' + str(file_name)):
-		shutil.rmtree('text/' + str(file_name), ignore_errors=True)
+	if os.path.isdir(os.path.join(temp_table_folder, str(file_name))):
+		logger.info('Clearing table temp folder from existing files...')
+		shutil.rmtree(os.path.join(temp_table_folder, str(file_name)), ignore_errors=True)
+		logger.info('Clear done')
+	if os.path.isdir(os.path.join(temp_text_folder, str(file_name))):
+		logger.info('Clearing text temp folder from existing files...')
+		shutil.rmtree(os.path.join(temp_text_folder, str(file_name)), ignore_errors=True)
+		logger.info('Clear done')
 
 	try:
-		os.mkdir('tables/' + str(file_name))
+		logger.info('Creating ' + temp_table_folder + '...')
+		os.mkdir(os.path.join(temp_table_folder, str(file_name)))
+		logger.info(temp_table_folder + ' created')
 	except OSError as exc:  # Guard against race condition
 		if exc.errno != errno.EEXIST:
+			logger.info(temp_table_folder + ' was not created. Maybe already present')
 			raise
 
 	try:
-		os.mkdir('text/' + str(file_name))
+		logger.info('Creating ' + temp_text_folder + '...')
+		os.mkdir(os.path.join(temp_text_folder, str(file_name)))
+		logger.info(temp_text_folder + ' created')
 	except OSError as exc:  # Guard against race condition
 		if exc.errno != errno.EEXIST:
+			logger.info(temp_text_folder + ' was not created. Maybe already present')
 			raise
 
 
-def write_crops(file_name, cropped_tables, cropped_text):
+def write_crops(file_name, cropped_tables, cropped_text, temp_table_path='tables', temp_text_path='text'):
 	"""
 	Writes table and text images under table and text folder
 
 	:param file_name:
-	:param cropped_tables:
-	:param cropped_text:
+	:param cropped_tables: list of pillow images
+	:param cropped_text: list of pillow images
+	:param temp_table_path:
+	:param temp_text_path:
 	:return: None
 	"""
 
 	i = 0
+	logger.info('Writing cropped tables...')
 	for ct in cropped_tables:
-		new_file_path = 'tables/' + str(file_name) + '/table_' + str(i) + '.jpeg'
-		ct.save(new_file_path)
+		new_file_path = os.path.join(temp_table_path, str(file_name), 'table_' + str(i) + '.jpeg')
+		ct_t = ct.convert('L')
+		ct_t.save(new_file_path)
 		i += 1
+	logger.info('Writing cropped tables done.')
 
-	new_file_path = 'text/' + str(file_name) + '/text' + '.jpeg'
-	cropped_text.save(new_file_path)
+	i = 0
+	logger.info('Writing cropped text...')
+	for cl in cropped_text:
+		new_file_path = os.path.join(temp_text_path, str(file_name), 'text_' + str(i) + '.jpeg')
+		ct_l = cl.convert('L')
+		ct_l.save(new_file_path)
+		i += 1
+	logger.info('Writing cropped text done.')
 
 
-def main():
+def main_batch():
 	for file in glob.iglob(PATH_TO_IMAGES + '/**/*.jpeg', recursive=True):
 		# if file.endswith(".jpeg"):
 		path_to_image = os.path.join(file)
 		file_name = os.path.splitext(path_to_image)[0] \
 			.split("\\")[-1]
 		print('Now processing: ' + str(file_name))
-		clear_and_create_folders(file_name=file_name)
-		cropped_tables, cropped_text = extract_tables_and_text(path_to_image, PATH_TO_CKPT)
+		clear_and_create_temp_folders(file_name=file_name)
+		pil_image = Image.open(path_to_image)
+		cropped_tables, cropped_text = extract_tables_and_text(pil_image=pil_image, inference_graph_path=PATH_TO_CKPT)
 		write_crops(
 			file_name=file_name,
 			cropped_tables=cropped_tables,
@@ -294,5 +409,23 @@ def main():
 
 PATH_TO_CKPT = '../TableTrainNet/data/frozen_inference_graph_momentum.pb'
 PATH_TO_IMAGES = './PDFs/'
-main()
 
+
+def find_table(file_name, pil_image, create_temp_files=False, temp_table_path='tables', temp_text_path='text'):
+	"""
+	useful only for batch. The function extract_tables_and_text does everything
+	:param file_name:
+	:param pil_image:
+	:param create_temp_files:
+	:param temp_table_path:
+	:param temp_text_path:
+	:return:
+	"""
+	cropped_tables, cropped_text = extract_tables_and_text(pil_image=pil_image, inference_graph_path=PATH_TO_CKPT)
+	if create_temp_files:
+		clear_and_create_temp_folders(file_name=file_name)
+		write_crops(
+			file_name=file_name,
+			cropped_tables=cropped_tables,
+			cropped_text=cropped_text
+		)

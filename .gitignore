@@ -1,5 +1,8 @@
 PDFs/
 .idea/
 test/
-tables/
+table/
 text/
+temp/
+__pycache__/
+*.log
