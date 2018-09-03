@@ -5,13 +5,15 @@ import errno
 import glob
 import tensorflow as tf
 from PIL import Image
+from alyn import deskew
 import logging
 from logger import return_handler
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-logger.addHandler(return_handler())
+file_name = 'pipeline-' + str(0) + '.log'
+logger.addHandler(return_handler(file_name))
 
 
 def reshape_image_into_numpy_array(pil_image):
@@ -87,11 +89,12 @@ def check_if_intersected(coord_a, coord_b):
 	:return: true if intersected, false instead
 	"""
 	logger.info('Returning if the two boxes are intersected...')
-	return \
-		coord_a['x_max'] > coord_b['x_min'] and \
-		coord_a['x_min'] < coord_b['x_max'] and \
-		coord_a['y_max'] > coord_b['y_min'] and \
-		coord_a['y_min'] < coord_b['x_max']
+	# return \
+	# 	coord_a['x_max'] > coord_b['x_min'] and \
+	# 	coord_a['x_min'] < coord_b['x_max'] and \
+	# 	coord_a['y_max'] > coord_b['y_min'] and \
+	# 	coord_a['y_min'] < coord_b['x_max']
+	return False
 
 
 def check_if_vertically_overlapped(coord_a, coord_b):
@@ -103,41 +106,47 @@ def check_if_vertically_overlapped(coord_a, coord_b):
 	:return: true if intersected, false instead
 	"""
 	return \
-		coord_a['y_min'] <= coord_b['y_min'] <= coord_a['y_max'] or \
-		coord_a['y_min'] <= coord_b['y_max'] <= coord_a['y_max'] or \
-		(coord_a['y_min'] > coord_b['y_min'] and coord_a['y_max'] < coord_b['y_max']) or \
-		(coord_a['y_min'] < coord_b['y_min'] and coord_a['y_max'] > coord_b['y_max'])
+		coord_a['y_min'] < coord_b['y_min'] < coord_a['y_max'] or \
+		coord_a['y_min'] < coord_b['y_max'] < coord_a['y_max'] or \
+		(coord_a['y_min'] >= coord_b['y_min'] and coord_a['y_max'] <= coord_b['y_max']) or \
+		(coord_a['y_min'] <= coord_b['y_min'] and coord_a['y_max'] >= coord_b['y_max'])
 
 
 def merge_vertically_overlapping_boxes(boxes):
-	logger.info('Merging vertical overlapping boxes...')
 	merged_boxes = [boxes[0]]
-	for i in range(len(boxes)-1):
-		coord_a = {
-			'y_min': boxes[i-1][0],
-			'x_min': boxes[i-1][1],
-			'y_max': boxes[i-1][2],
-			'x_max': boxes[i-1][3]
-		}
-		coord_b = {
-			'y_min': boxes[i][0],
-			'x_min': boxes[i][1],
-			'y_max': boxes[i][2],
-			'x_max': boxes[i][3]
-		}
-		if \
-		coord_a['x_max'] > coord_b['x_min'] and \
-		coord_a['x_min'] < coord_b['x_max'] and \
-		coord_a['y_max'] > coord_b['y_min'] and \
-		coord_a['y_min'] < coord_b['x_max']:
-			logger.info('Box is overlapping vertically with previous. Merging tables')
-			if boxes[i-1][0] > boxes[i][0]:
-				boxes[i-1][0] = boxes[i][0]
-			if boxes[i-1][2] < boxes[i][2]:
-				boxes[i-1][2] = boxes[i][2]
-			merged_boxes = merge_vertically_overlapping_boxes(merged_boxes)
-	logger.info('Boxes merged successfully')
-	return merged_boxes
+	i = 0
+	flag = False
+	for box in boxes[1:]:
+		i += 1
+		# print('iterations on merging' + str(i))
+
+		for m_box in merged_boxes:
+			coord_m_box = {
+				'y_min': m_box[0],
+				'x_min': m_box[1],
+				'y_max': m_box[2],
+				'x_max': m_box[3]
+			}
+			coord_box = {
+				'y_min': box[0],
+				'x_min': box[1],
+				'y_max': box[2],
+				'x_max': box[3]
+			}
+			if check_if_vertically_overlapped(coord_m_box, coord_box):
+				flag = True
+				if m_box[0] > box[0]:
+					m_box[0] = box[0]
+				if m_box[2] < box[2]:
+					m_box[2] = box[2]
+		if not flag:
+			merged_boxes.append(box)
+	# print('merged boxes')
+	# print(merged_boxes)
+	if flag:
+		return merge_vertically_overlapping_boxes(merged_boxes)
+	else:
+		return merged_boxes
 
 
 def keep_best_boxes(boxes, scores, max_num_boxes=5, min_score=0.8):
@@ -151,22 +160,19 @@ def keep_best_boxes(boxes, scores, max_num_boxes=5, min_score=0.8):
 	:param min_score: min box score to check
 	:return: list of the best not overlapping boxes
 	"""
-
+	logger.info('Detecting best matching boxes...')
 	kept_scores = []
 	kept_boxes = []  # always keep the firs box, which is the best one.
 	num_boxes = 0
 	i = 0
-	logger.info('Checking if there are boxes in page...')
 	if scores[0] > min_score:
-		logger.info('Boxes found.')
 		kept_boxes.append(boxes[0])
 		kept_scores.append(scores[0])
 		num_boxes += 1
 		i += 1
-		logger.info('Checking if there are other boxes...')
 		for b in boxes[1:]:
 			if num_boxes < max_num_boxes and scores[i] > min_score:
-				flag = True
+				intersected = False
 				coord_b = {
 					'y_min': b[0],
 					'x_min': b[1],
@@ -181,13 +187,11 @@ def keep_best_boxes(boxes, scores, max_num_boxes=5, min_score=0.8):
 						'y_max': kb[2],
 						'x_max': kb[3]
 					}
-					flag = check_if_intersected(
-						coord_a=coord_b,
-						coord_b=coord_kb
-					)
-				if flag:
-					logger.info('Box is not overlapping')
-					logger.info('New box found, appending to list.')
+					# intersected = check_if_intersected(
+					# 	coord_a=coord_b,
+					# 	coord_b=coord_kb
+					# )
+				if not intersected:
 					kept_boxes.append(b)
 					num_boxes += 1
 					kept_scores.append(scores[i])
@@ -203,9 +207,11 @@ def keep_best_boxes(boxes, scores, max_num_boxes=5, min_score=0.8):
 		# for score in kept_scores:
 		# 	print('Score:\t')
 		# 	print(score)
+
 		kept_boxes = merge_vertically_overlapping_boxes(kept_boxes)
+		print('keep_best_boxes')
+		print(kept_boxes)
 	else:
-		logger.info('No boxes found in page')
 		kept_boxes = []
 		# print('No boxes found\nBest score:\t' + str(scores[0]))
 
@@ -280,7 +286,7 @@ def extract_tables_and_text(pil_image, inference_graph_path):
 	best_boxes, best_scores = keep_best_boxes(
 		boxes=boxes,
 		scores=scores,
-		max_num_boxes=5,
+		max_num_boxes=10,
 		min_score=0.4
 	)
 	logger.info("Best boxes are: ")
@@ -359,7 +365,7 @@ def clear_and_create_temp_folders(file_name, temp_table_folder='table', temp_tex
 			raise
 
 
-def write_crops(file_name, cropped_tables, cropped_text, temp_table_path='tables', temp_text_path='text'):
+def write_crops(file_name, cropped_tables=None, cropped_text=None, temp_table_path='tables', temp_text_path='text'):
 	"""
 	Writes table and text images under table and text folder
 
@@ -370,24 +376,36 @@ def write_crops(file_name, cropped_tables, cropped_text, temp_table_path='tables
 	:param temp_text_path:
 	:return: None
 	"""
-
 	i = 0
 	logger.info('Writing cropped tables...')
-	for ct in cropped_tables:
-		new_file_path = os.path.join(temp_table_path, str(file_name), 'table_' + str(i) + '.jpeg')
-		ct_t = ct.convert('L')
-		ct_t.save(new_file_path)
-		i += 1
-	logger.info('Writing cropped tables done.')
+	if cropped_tables is not None:
+		for ct in cropped_tables:
+			new_file_path = os.path.join(temp_table_path, str(file_name), 'table_' + str(i) + '.jpeg')
+			ct = ct.convert('L')
+			logger.info('Deskewing table...')
+			sd = deskew.Deskew(
+				input_numpy=np.asarray(ct),
+				output_numpy=True
+			)
+			de_skewed_image_np = sd.run()
+			logger.info('Deskew done')
+			ct = Image.fromarray(de_skewed_image_np)
+			ct = ct.convert(mode='L')
+			ct.save(new_file_path)
+			i += 1
+		logger.info('Writing cropped tables done.')
+	else:
+		logger.info('No tables to write on disk')
 
-	i = 0
-	logger.info('Writing cropped text...')
-	for cl in cropped_text:
-		new_file_path = os.path.join(temp_text_path, str(file_name), 'text_' + str(i) + '.jpeg')
-		ct_l = cl.convert('L')
-		ct_l.save(new_file_path)
-		i += 1
-	logger.info('Writing cropped text done.')
+	if cropped_text is not None:
+		i = 0
+		logger.info('Writing cropped text...')
+		for cl in cropped_text:
+			new_file_path = os.path.join(temp_text_path, str(file_name), 'text_' + str(i) + '.jpeg')
+			ct_l = cl.convert('L')
+			ct_l.save(new_file_path)
+			i += 1
+		logger.info('Writing cropped text done.')
 
 
 def main_batch():
