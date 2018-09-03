@@ -5,11 +5,11 @@ import errno
 import numpy as np
 import shutil
 import cv2
-from pdf2image import convert_from_path
 import logging
 from logger import return_handler
-from costants import extraction_dpi, threads_for_extraction
-from memory_profiler import profile
+from costants import extraction_dpi, temp_page_from_pdf
+from subprocess import Popen, PIPE, STDOUT
+import copy
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -63,23 +63,91 @@ def from_pdf_to_pil_list_images(file_path):
 	:param file_path:
 	:return: image generator from pdf
 	"""
+	flag = True
+	first_page = 1
+	last_page = 1
 	logger.info("Creating page generator from " + str(file_path) + "...")
-	# load all pages in lowest res to count the pages
-	images = convert_from_path(file_path, dpi=1)
-	num_pages = len(images)
-	# delete var to free ram
-	del images
-	# read one page at a once.
-	for n in range(num_pages):
-		img = convert_from_path(
+	if not os.path.exists(temp_page_from_pdf):
+		try:
+			os.mkdir(temp_page_from_pdf)
+		except OSError as exc:  # Guard against race condition
+			if exc.errno != errno.EEXIST:
+				raise
+
+	while flag:
+
+		args = [
+			"pdftoppm",
+			"-l",
+			str(first_page),
+			"-f",
+			str(last_page),
+			"-r",
+			str(extraction_dpi),
+			"-gray",
 			file_path,
-			dpi=extraction_dpi,
-			first_page=n,
-			last_page=n,
-			thread_count=threads_for_extraction
+			os.path.join(temp_page_from_pdf, "temp")
+		]
+
+		# args.append(item for item in config_list)
+
+		proc = Popen(
+			args,
+			stdin=PIPE,
+			stdout=PIPE,
+			stderr=STDOUT,
+			# cwd=os.path.join(temp_page_from_pdf)
 		)
-		logger.info('Generator created')
-		yield img[0]
+		output, outerr = proc.communicate()
+
+		if proc.returncode == 0:
+			# Everything went well
+			logger.info("page: {}"
+							.format(first_page) + 'successfully extracted')
+			if first_page < 9:
+				fp = os.path.join(temp_page_from_pdf, 'temp-{}.pgm'.format(first_page))
+			else:
+				fp = os.path.join(temp_page_from_pdf, 'temp-{}.pgm'.format(first_page))
+			# print(fp)
+			img = Image.open(fp)
+			img = copy.deepcopy(img)
+			if os.path.exists(fp):
+				os.remove(fp)
+			img.convert(mode='L')
+			yield img
+			first_page += 1
+			last_page += 1
+
+		else:
+			if outerr is None:
+				logger.info('Probably reached end of file. The following error messages can be ignored.')
+			logger.error("Error while extracting pdf page at {}".format(first_page))
+			logger.error("Tesseract Output: {}".format(output))
+			logger.error("Tesseract Error: {}".format(outerr))
+			flag = False
+
+
+
+	# load all pages in lowest res to count the pages
+	# with tempfile.TemporaryDirectory() as path:
+	# images = convert_from_path(file_path, dpi=1)
+	# num_pages = len(images)
+	# delete var to free ram
+	# del images
+	# read one page at a once.
+	# for n in range(50):
+	# 	img = convert_from_path(
+	# 		file_path,
+	# 		dpi=extraction_dpi,
+	# 		first_page=n,
+	# 		last_page=n,
+	# 		thread_count=1
+	# 		output_folder=path
+		# )
+		# yield img[0]
+	# for img in images:
+	# 	logger.info('Generator created')
+	# 	yield img
 
 
 def beautify_pages(page_generator, create_temp_folder=False, temp_path='temp', file_name=None):

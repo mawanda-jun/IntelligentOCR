@@ -339,11 +339,11 @@ def clear_and_create_temp_folders(file_name, temp_table_folder='table', temp_tex
 
 	if os.path.isdir(os.path.join(temp_table_folder, str(file_name))):
 		logger.info('Clearing table temp folder from existing files...')
-		shutil.rmtree(os.path.join(temp_table_folder, str(file_name)), ignore_errors=True)
+		# shutil.rmtree(os.path.join(temp_table_folder, str(file_name)), ignore_errors=True)
 		logger.info('Clear done')
 	if os.path.isdir(os.path.join(temp_text_folder, str(file_name))):
 		logger.info('Clearing text temp folder from existing files...')
-		shutil.rmtree(os.path.join(temp_text_folder, str(file_name)), ignore_errors=True)
+		# shutil.rmtree(os.path.join(temp_text_folder, str(file_name)), ignore_errors=True)
 		logger.info('Clear done')
 
 	try:

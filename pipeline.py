@@ -42,7 +42,7 @@ def pipeline(pdf_path, inference_graph_path):
 			# cropped_text.append(c_text)
 			logger.info('Extraction of tables and text completed')
 			if not c_tables == []:
-				# clear_and_create_temp_folders(file_name)
+				clear_and_create_temp_folders(file_name)
 				write_crops(
 					file_name=file_name,
 					cropped_tables=c_tables,
