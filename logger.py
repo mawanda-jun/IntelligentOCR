@@ -3,9 +3,8 @@ import os
 import time
 
 
-def return_handler():
+def return_handler(file_name):
 	# create a file handler
-	file_name = 'pipeline-' + str(0) + '.log'
 	handler = logging.FileHandler(file_name)
 	handler.setLevel(logging.INFO)
 
