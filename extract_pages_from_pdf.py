@@ -8,7 +8,8 @@ import cv2
 from pdf2image import convert_from_path
 import logging
 from logger import return_handler
-from costants import extraction_dpi
+from costants import extraction_dpi, threads_for_extraction
+from memory_profiler import profile
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -57,53 +58,85 @@ def write_image_on_temp_file(file_name, image_np, counter=0, temp_path='temp'):
 
 
 def from_pdf_to_pil_list_images(file_path):
+	"""
+	Create a page generator from pdf to make it load less RAM as it takes one page at a once
+	:param file_path:
+	:return: image generator from pdf
+	"""
+	logger.info("Creating page generator from " + str(file_path) + "...")
+	# load all pages in lowest res to count the pages
+	images = convert_from_path(file_path, dpi=1)
+	num_pages = len(images)
+	# delete var to free ram
+	del images
+	# read one page at a once.
+	for n in range(num_pages):
+		img = convert_from_path(
+			file_path,
+			dpi=extraction_dpi,
+			first_page=n,
+			last_page=n,
+			thread_count=threads_for_extraction
+		)
+		logger.info('Generator created')
+		yield img[0]
+
+
+def beautify_pages(page_generator, create_temp_folder=False, temp_path='temp', file_name=None):
 	# print('Generating images from PDF...')
-	logger.info('Generating images from PDF...')
+	# logger.info('Generating images from PDF...')
 	# all_pages = wImage(filename=file_path, resolution=300)
-	all_pages = convert_from_path(
-		pdf_path=file_path,
-		dpi=extraction_dpi,
-		fmt='jpeg',
-		thread_count=2
-	)
-	logger.info('All pages converted from pdf')
-	bw_pil_list = []
+	# all_pages = page_generator(file_path)
+	# logger.info('All pages converted from pdf')
+	# bw_pil_list = []
 	logger.info('Converting images in greyscale...')
-	for page in all_pages:
-		pg = page.convert(
+	counter = 0
+	for page in page_generator:
+		page = page.convert(
 			mode='L'
 		)
-		bw_pil_list.append(pg)
-		logger.info('Page converted in greyscale and appended to returning list')
-	return bw_pil_list
-
-
-def beautify_pages(bw_pil_list, create_temp_folder=False, temp_path='temp', file_name=None):
-	"""
-	Do some modifications to the pil list to make recognition work better
-	:param bw_pil_list:
-	:param create_temp_folder:
-	:param temp_path:
-	:param file_name:
-	:return:
-	"""
-	logger.info('Making pages looks better for recognition...')
-	# run beautifier over image blobs
-	pil_beautified_images = []
-	counter = 0
-	for image in bw_pil_list:
-		counter = counter + 1
-		image_np = np.asarray(image)
-		logger.info('Beautifying page ' + str(counter))
+		# bw_pil_list.append(pg)
+		logger.info('Page converted to greyscale')
+		# load image as np for beautifying
+		logger.info('Beautifying image...')
+		image_np = np.asarray(page)
 		beautified_image_np = beautify_image(image_np)
-		pil_beautified_images.append(Image.fromarray(beautified_image_np))
-
+		logger.info('Image beautified')
 		if create_temp_folder:
 			logger.info('Creating temp files...')
 			write_image_on_temp_file(file_name, beautified_image_np, counter, temp_path)
 			logger.info('Temp files created.')
 
-	return pil_beautified_images
+	# return b/w pil generator
+		yield page
+
+
+# def beautify_pages(bw_pil_list, create_temp_folder=False, temp_path='temp', file_name=None):
+# 	"""
+# 	Do some modifications to the pil list to make recognition work better
+# 	:param bw_pil_list:
+# 	:param create_temp_folder:
+# 	:param temp_path:
+# 	:param file_name:
+# 	:return:
+# 	"""
+# 	logger.info('Making pages looks better for recognition...')
+# 	# run beautifier over image blobs
+# 	pil_beautified_images = []
+# 	counter = 0
+# 	for image in bw_pil_list:
+# 		counter = counter + 1
+# 		image_np = np.asarray(image)
+# 		logger.info('Beautifying page ' + str(counter))
+# 		beautified_image_np = beautify_image(image_np)
+# 		pil_beautified_images.append(Image.fromarray(beautified_image_np))
+#
+# 		if create_temp_folder:
+# 			logger.info('Creating temp files...')
+# 			write_image_on_temp_file(file_name, beautified_image_np, counter, temp_path)
+# 			logger.info('Temp files created.')
+#
+# 	return pil_beautified_images
 
 
 def beautify_image(np_array_image):
@@ -144,17 +177,18 @@ def generate_pil_images_from_pdf(file_path, create_temp_folder=False, temp_path=
 		logger.info('Creating temp folder...')
 		clear_and_create_create_temp_folders(file_name)
 		logger.info('Temp folder created')
-	bw_pil_list = from_pdf_to_pil_list_images(file_path)
-	# bar = pyprind.ProgPercent(len(bw_pil_list), track_time=True, title='Processing images...', stream=sys.stdout)
+	pil_gen = from_pdf_to_pil_list_images(file_path)
+	# bar = pyprind.ProgPercent(len(pil_gen), track_time=True, title='Processing images...', stream=sys.stdout)
 	# bar.update()
-	bw_beautified_pil_list = beautify_pages(
-		bw_pil_list=bw_pil_list,
+	bw_beautified_pil_gen = beautify_pages(
+		page_generator=pil_gen,
 		create_temp_folder=create_temp_folder,
 		temp_path=temp_path,
 		file_name=file_name
 	)
 	logging.info('Extraction of pages from pdf completed')
-	return bw_beautified_pil_list
+	# print('Fin qui tutto bene')
+	return bw_beautified_pil_gen
 
 
 

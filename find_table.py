@@ -304,7 +304,7 @@ def extract_tables_and_text(pil_image, inference_graph_path):
 		box[3] = int(box[3]*im_width)
 
 	(cropped_tables, cropped_text) = crop_wide(pil_image, best_boxes)
-	return cropped_tables, cropped_text
+	return (cropped_tables, cropped_text)
 
 
 def clear_and_create_temp_folders(file_name, temp_table_folder='table', temp_text_folder='text'):
@@ -400,11 +400,11 @@ def write_crops(file_name, cropped_tables=None, cropped_text=None, temp_table_pa
 	if cropped_text is not None:
 		i = 0
 		logger.info('Writing cropped text...')
-		for cl in cropped_text:
-			new_file_path = os.path.join(temp_text_path, str(file_name), 'text_' + str(i) + '.jpeg')
-			ct_l = cl.convert('L')
-			ct_l.save(new_file_path)
-			i += 1
+		# for cl in cropped_text:
+		new_file_path = os.path.join(temp_text_path, str(file_name), 'text_' + str(i) + '.jpeg')
+			# ct_l = cl.convert('L')
+		cropped_text.save(new_file_path)
+			# i += 1
 		logger.info('Writing cropped text done.')
 
 

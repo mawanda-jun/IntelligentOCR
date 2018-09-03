@@ -13,8 +13,10 @@ logger.setLevel(logging.INFO)
 file_name = 'pipeline-' + str(0) + '.log'
 logger.addHandler(return_handler(file_name))
 
+fp = open('memory_profiler_yield.log', 'w+')
 
-@profile()
+
+@profile(stream=fp)
 def pipeline(pdf_path, inference_graph_path):
 		# if file.endswith(".jpeg"):
 		path_to_pdf = os.path.join(pdf_path)
@@ -22,35 +24,35 @@ def pipeline(pdf_path, inference_graph_path):
 			.split("\\")[-1]
 		file_name = file_name.replace(" ", "_")
 		logger.info('Now elaborating: ' + str(file_name))
-		bw_pil_list = generate_pil_images_from_pdf(
+		bw_pil_gen = generate_pil_images_from_pdf(
 			file_path=path_to_pdf,
 			create_temp_folder=False,
 			temp_path='temp'
 		)
 		cropped_text = []
 		cropped_tables = []
-		for pil_image in bw_pil_list:
+		counter = 0
+		for pil_image in bw_pil_gen:
 			c_tables, c_text = extract_tables_and_text(
 				pil_image=pil_image,
 				inference_graph_path=inference_graph_path
 			)
-			cropped_tables.extend(c_tables)
-			cropped_text.append(c_text)
-		logger.info('Extraction of tables and text completed')
-		if not cropped_tables == []:
-			clear_and_create_temp_folders(file_name)
-			write_crops(
-				file_name=file_name,
-				cropped_tables=cropped_tables,
-				cropped_text=cropped_text,
-				temp_table_path='table',
-				temp_text_path='text'
-			)
-		logger.info('Writing tables on disk completed')
+			# yield (c_tables, c_text)
+			# cropped_tables.extend(c_tables)
+			# cropped_text.append(c_text)
+			logger.info('Extraction of tables and text completed')
+			if not c_tables == []:
+				# clear_and_create_temp_folders(file_name)
+				write_crops(
+					file_name=file_name,
+					cropped_tables=c_tables,
+					cropped_text=c_text,
+					temp_table_path='table',
+					temp_text_path='text'
+				)
+			logger.info('Writing tables on disk completed')
 
-		if not cropped_text == []:
-			counter = 0
-			for pil_image in cropped_text:
+			if not c_text == []:
 				do_ocr_to_text(pil_image, 'text' + str(counter), os.path.join('text', file_name))
 				counter += 1
 
