@@ -8,11 +8,13 @@ import cv2
 from pdf2image import convert_from_path
 import logging
 from logger import return_handler
+from costants import extraction_dpi
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-logger.addHandler(return_handler())
+file_name = 'pipeline-' + str(0) + '.log'
+logger.addHandler(return_handler(file_name))
 # logger.info('Hello baby')
 
 # import argparse
@@ -60,7 +62,7 @@ def from_pdf_to_pil_list_images(file_path):
 	# all_pages = wImage(filename=file_path, resolution=300)
 	all_pages = convert_from_path(
 		pdf_path=file_path,
-		dpi=100,
+		dpi=extraction_dpi,
 		fmt='jpeg',
 		thread_count=2
 	)
@@ -86,12 +88,13 @@ def beautify_pages(bw_pil_list, create_temp_folder=False, temp_path='temp', file
 	:return:
 	"""
 	logger.info('Making pages looks better for recognition...')
-	counter = 0
 	# run beautifier over image blobs
 	pil_beautified_images = []
+	counter = 0
 	for image in bw_pil_list:
 		counter = counter + 1
 		image_np = np.asarray(image)
+		logger.info('Beautifying page ' + str(counter))
 		beautified_image_np = beautify_image(image_np)
 		pil_beautified_images.append(Image.fromarray(beautified_image_np))
 
