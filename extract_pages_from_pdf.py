@@ -5,16 +5,17 @@ import errno
 import numpy as np
 import shutil
 import cv2
-from pdf2image import convert_from_path
 import logging
-from logger import return_handler
-from costants import extraction_dpi
+from logger import TimeHandler
+from costants import EXTRACTION_DPI, TEMP_IMG_FOLDER_FROM_PDF, TEXT_TEMP_FOLDER, TABLE_TEMP_FOLDER
+from subprocess import Popen, PIPE, STDOUT
+import copy
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-file_name = 'pipeline-' + str(0) + '.log'
-logger.addHandler(return_handler(file_name))
+# file_name = 'pipeline-' + str(0) + '.log'
+logger.addHandler(TimeHandler().handler)
 # logger.info('Hello baby')
 
 # import argparse
@@ -27,7 +28,7 @@ logger.addHandler(return_handler(file_name))
 def clear_and_create_create_temp_folders(file_name, temp_path='temp'):
 	logger.info('Clear and create temp file for images from pdf')
 	try:
-		os.mkdir(temp_path)
+		os.makedirs(temp_path)
 		logger.info('Folder created successfully')
 	except OSError as exc:  # Guard against race condition
 		if exc.errno != errno.EEXIST:
@@ -38,7 +39,7 @@ def clear_and_create_create_temp_folders(file_name, temp_path='temp'):
 		logger.info('Deleting not empty temp folder')
 		shutil.rmtree(os.path.join(temp_path, str(file_name)), ignore_errors=True)
 	try:
-		os.mkdir(os.path.join(temp_path, str(file_name)))
+		os.makedirs(os.path.join(temp_path, str(file_name)))
 		logger.info('Subfolder of parent created successfully')
 	except OSError as exc:  # Guard against race condition
 		if exc.errno != errno.EEXIST:
@@ -56,54 +57,175 @@ def write_image_on_temp_file(file_name, image_np, counter=0, temp_path='temp'):
 	logger.info('Image_ ' + str(counter) + 'wrote on disk')
 
 
-def from_pdf_to_pil_list_images(file_path):
+def from_pdf_to_pil_list_images(file_path, thread_name=None):
+	"""
+	Create a page generator from pdf to make it load less RAM as it takes one page at a once
+	:param file_path:
+	:return: image generator from pdf
+	"""
+	flag = True
+	first_page = 1
+	last_page = 1
+	logger.info("Creating page generator from " + str(file_path) + "...")
+	if not os.path.isdir(TEMP_IMG_FOLDER_FROM_PDF):
+		try:
+			os.makedirs(TEMP_IMG_FOLDER_FROM_PDF)
+		except OSError as exc:  # Guard against race condition
+			if exc.errno != errno.EEXIST:
+				raise
+
+	while True:
+
+		args = [
+			"pdftoppm",
+			"-l",
+			str(first_page),
+			"-f",
+			str(last_page),
+			"-r",
+			str(EXTRACTION_DPI),
+			"-gray",
+			file_path,
+			os.path.join(TEMP_IMG_FOLDER_FROM_PDF, "temp-{tn}".format(tn=thread_name))
+		]
+
+		# args.append(item for item in config_list)
+
+		proc = Popen(
+			args,
+			stdin=PIPE,
+			stdout=PIPE,
+			stderr=STDOUT,
+			# cwd=os.path.join(TEMP_IMG_FOLDER_FROM_PDF)
+		)
+		output, outerr = proc.communicate()
+
+		if proc.returncode == 0:
+			# Everything went well
+			logger.info("page: {}"
+							.format(first_page) + 'successfully extracted')
+			if first_page < 10:
+				fp = os.path.join(TEMP_IMG_FOLDER_FROM_PDF, 'temp-{tn}-{n}.pgm'.format(n=first_page, tn=thread_name))
+				if not os.path.isfile(fp):
+					fp = os.path.join(TEMP_IMG_FOLDER_FROM_PDF, 'temp-{tn}-0{n}.pgm'.format(n=first_page, tn=thread_name))
+					if not os.path.isfile(fp):
+						fp = os.path.join(TEMP_IMG_FOLDER_FROM_PDF, 'temp-{tn}-00{n}.pgm'.format(n=first_page, tn=thread_name))
+					else:
+						logging.error('Something went wrong...')
+			elif 11 <= first_page <= 100:
+				fp = os.path.join(TEMP_IMG_FOLDER_FROM_PDF, 'temp-{tn}-{n}.pgm'.format(n=first_page, tn=thread_name))
+				if not os.path.isfile(fp):
+					fp = os.path.join(TEMP_IMG_FOLDER_FROM_PDF, 'temp-{tn}-0{n}.pgm'.format(n=first_page, tn=thread_name))
+				else:
+					logging.error('Something went wrong...')
+			else:
+				fp = os.path.join(TEMP_IMG_FOLDER_FROM_PDF, 'temp-{tn}-{n}.pgm'.format(n=first_page, tn=thread_name))
+
+			# print(fp)
+			img = Image.open(fp)
+			img = copy.deepcopy(img)
+			if os.path.exists(fp):
+				os.remove(fp)
+			img.convert(mode='L')
+			yield img
+			first_page += 1
+			last_page += 1
+
+		else:
+			if outerr is None:
+				guessed_output = "b'Wrong page range given: the first page ({initial_page}) can not be after " \
+									  "the last page ({initial_page_1}).\\r\\n'" \
+					.format(initial_page=first_page, initial_page_1=first_page - 1)
+				if "{}".format(output) == guessed_output:
+					logger.info('Reached end of file.')
+				else:
+					logger.warning('Something went wrong...')
+					logger.warning('Tesseract output: {}'.format(output))
+			else:
+				logger.error("Error while extracting pdf page at {}".format(first_page))
+				logger.error("Tesseract Output: {}".format(output))
+				logger.error("Tesseract Error: {}".format(outerr))
+			raise StopIteration
+
+
+
+	# load all pages in lowest res to count the pages
+	# with tempfile.TemporaryDirectory() as path:
+	# images = convert_from_path(file_path, dpi=1)
+	# num_pages = len(images)
+	# delete var to free ram
+	# del images
+	# read one page at a once.
+	# for n in range(50):
+	# 	img = convert_from_path(
+	# 		file_path,
+	# 		dpi=EXTRACTION_DPI,
+	# 		first_page=n,
+	# 		last_page=n,
+	# 		thread_count=1
+	# 		output_folder=path
+		# )
+		# yield img[0]
+	# for img in images:
+	# 	logger.info('Generator created')
+	# 	yield img
+
+
+def beautify_pages(page_generator, create_temp_folder=False, temp_path='temp', file_name=None):
 	# print('Generating images from PDF...')
-	logger.info('Generating images from PDF...')
+	# logger.info('Generating images from PDF...')
 	# all_pages = wImage(filename=file_path, resolution=300)
-	all_pages = convert_from_path(
-		pdf_path=file_path,
-		dpi=extraction_dpi,
-		fmt='jpeg',
-		thread_count=2
-	)
-	logger.info('All pages converted from pdf')
-	bw_pil_list = []
+	# all_pages = page_generator(file_path)
+	# logger.info('All pages converted from pdf')
+	# bw_pil_list = []
 	logger.info('Converting images in greyscale...')
-	for page in all_pages:
-		pg = page.convert(
+	counter = 0
+	for page in page_generator:
+		page = page.convert(
 			mode='L'
 		)
-		bw_pil_list.append(pg)
-		logger.info('Page converted in greyscale and appended to returning list')
-	return bw_pil_list
-
-
-def beautify_pages(bw_pil_list, create_temp_folder=False, temp_path='temp', file_name=None):
-	"""
-	Do some modifications to the pil list to make recognition work better
-	:param bw_pil_list:
-	:param create_temp_folder:
-	:param temp_path:
-	:param file_name:
-	:return:
-	"""
-	logger.info('Making pages looks better for recognition...')
-	# run beautifier over image blobs
-	pil_beautified_images = []
-	counter = 0
-	for image in bw_pil_list:
-		counter = counter + 1
-		image_np = np.asarray(image)
-		logger.info('Beautifying page ' + str(counter))
+		# bw_pil_list.append(pg)
+		logger.info('Page converted to greyscale')
+		# load image as np for beautifying
+		logger.info('Beautifying image...')
+		image_np = np.asarray(page)
 		beautified_image_np = beautify_image(image_np)
-		pil_beautified_images.append(Image.fromarray(beautified_image_np))
-
+		logger.info('Image beautified')
 		if create_temp_folder:
 			logger.info('Creating temp files...')
 			write_image_on_temp_file(file_name, beautified_image_np, counter, temp_path)
 			logger.info('Temp files created.')
 
-	return pil_beautified_images
+	# return b/w pil generator
+		yield page
+
+
+# def beautify_pages(bw_pil_list, create_temp_folder=False, temp_path='temp', file_name=None):
+# 	"""
+# 	Do some modifications to the pil list to make recognition work better
+# 	:param bw_pil_list:
+# 	:param create_temp_folder:
+# 	:param temp_path:
+# 	:param file_name:
+# 	:return:
+# 	"""
+# 	logger.info('Making pages looks better for recognition...')
+# 	# run beautifier over image blobs
+# 	pil_beautified_images = []
+# 	counter = 0
+# 	for image in bw_pil_list:
+# 		counter = counter + 1
+# 		image_np = np.asarray(image)
+# 		logger.info('Beautifying page ' + str(counter))
+# 		beautified_image_np = beautify_image(image_np)
+# 		pil_beautified_images.append(Image.fromarray(beautified_image_np))
+#
+# 		if create_temp_folder:
+# 			logger.info('Creating temp files...')
+# 			write_image_on_temp_file(file_name, beautified_image_np, counter, temp_path)
+# 			logger.info('Temp files created.')
+#
+# 	return pil_beautified_images
 
 
 def beautify_image(np_array_image):
@@ -130,7 +252,7 @@ def beautify_image(np_array_image):
 	return to_return
 
 
-def generate_pil_images_from_pdf(file_path, create_temp_folder=False, temp_path='temp'):
+def generate_pil_images_from_pdf(file_path, create_temp_folder=False, temp_path='temp', thread_name=None):
 	"""
 	Takes a pdf file and convert it to jpeg bw images. create_temp_folder decide to write images to temp_path path.
 	:param file_path: /path/to/pdf.pdf
@@ -144,22 +266,21 @@ def generate_pil_images_from_pdf(file_path, create_temp_folder=False, temp_path=
 		logger.info('Creating temp folder...')
 		clear_and_create_create_temp_folders(file_name)
 		logger.info('Temp folder created')
-	bw_pil_list = from_pdf_to_pil_list_images(file_path)
-	# bar = pyprind.ProgPercent(len(bw_pil_list), track_time=True, title='Processing images...', stream=sys.stdout)
+	pil_gen = from_pdf_to_pil_list_images(file_path, thread_name=thread_name)
+	# bar = pyprind.ProgPercent(len(pil_gen), track_time=True, title='Processing images...', stream=sys.stdout)
 	# bar.update()
-	bw_beautified_pil_list = beautify_pages(
-		bw_pil_list=bw_pil_list,
+	bw_beautified_pil_gen = beautify_pages(
+		page_generator=pil_gen,
 		create_temp_folder=create_temp_folder,
 		temp_path=temp_path,
 		file_name=file_name
 	)
 	logging.info('Extraction of pages from pdf completed')
-	return bw_beautified_pil_list
+	# print('Fin qui tutto bene')
+	return bw_beautified_pil_gen
 
 
 
-# file_path='C:\\Users\\giova\\Documents\\PycharmProjects\\Polizze\\glossario.pdf'
-#
 # generate_pil_images_from_pdf(
 # 	file_path=file_path,
 # 	create_temp_folder=True,

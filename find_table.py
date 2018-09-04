@@ -1,5 +1,11 @@
 import numpy as np
 import os
+from costants import \
+	EXTRACTION_DPI, \
+	TEXT_TEMP_FOLDER, \
+	TABLE_TEMP_FOLDER, \
+	MAX_NUM_BOXES, \
+	MIN_SCORE
 import shutil
 import errno
 import glob
@@ -7,13 +13,12 @@ import tensorflow as tf
 from PIL import Image
 from alyn import deskew
 import logging
-from logger import return_handler
+from logger import TimeHandler
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-file_name = 'pipeline-' + str(0) + '.log'
-logger.addHandler(return_handler(file_name))
+logger.addHandler(TimeHandler().handler)
 
 
 def reshape_image_into_numpy_array(pil_image):
@@ -286,8 +291,8 @@ def extract_tables_and_text(pil_image, inference_graph_path):
 	best_boxes, best_scores = keep_best_boxes(
 		boxes=boxes,
 		scores=scores,
-		max_num_boxes=10,
-		min_score=0.4
+		max_num_boxes=MAX_NUM_BOXES,
+		min_score=MIN_SCORE
 	)
 	logger.info("Best boxes are: ")
 	for box in best_boxes:
@@ -307,7 +312,7 @@ def extract_tables_and_text(pil_image, inference_graph_path):
 	return cropped_tables, cropped_text
 
 
-def clear_and_create_temp_folders(file_name, temp_table_folder='table', temp_text_folder='text'):
+def create_temp_folders(file_name, temp_table_folder=TABLE_TEMP_FOLDER, temp_text_folder=TEXT_TEMP_FOLDER):
 	"""
 	Clear any existing table/file_name and text/file_name folder for creating new images
 
@@ -320,7 +325,7 @@ def clear_and_create_temp_folders(file_name, temp_table_folder='table', temp_tex
 	if not os.path.isdir(temp_table_folder):
 		# creates folder for table images per page
 		try:
-			os.mkdir(temp_table_folder)
+			os.makedirs(temp_table_folder)
 			logger.info(temp_table_folder + ' folder created successfully')
 		except OSError as exc:
 			if exc.errno != errno.EEXIST:
@@ -331,7 +336,7 @@ def clear_and_create_temp_folders(file_name, temp_table_folder='table', temp_tex
 	logger.info(temp_text_folder + ' folder created successfully')
 	if not os.path.isdir(temp_text_folder):
 		try:
-			os.mkdir(temp_text_folder)
+			os.makedirs(temp_text_folder)
 		except OSError as exc:
 			logger.info(temp_text_folder + ' folder was not created correctly. Probably already present')
 			if exc.errno != errno.EEXIST:
@@ -339,16 +344,16 @@ def clear_and_create_temp_folders(file_name, temp_table_folder='table', temp_tex
 
 	if os.path.isdir(os.path.join(temp_table_folder, str(file_name))):
 		logger.info('Clearing table temp folder from existing files...')
-		shutil.rmtree(os.path.join(temp_table_folder, str(file_name)), ignore_errors=True)
+		# shutil.rmtree(os.path.join(temp_table_folder, str(file_name)), ignore_errors=True)
 		logger.info('Clear done')
 	if os.path.isdir(os.path.join(temp_text_folder, str(file_name))):
 		logger.info('Clearing text temp folder from existing files...')
-		shutil.rmtree(os.path.join(temp_text_folder, str(file_name)), ignore_errors=True)
+		# shutil.rmtree(os.path.join(temp_text_folder, str(file_name)), ignore_errors=True)
 		logger.info('Clear done')
 
 	try:
 		logger.info('Creating ' + temp_table_folder + '...')
-		os.mkdir(os.path.join(temp_table_folder, str(file_name)))
+		os.makedirs(os.path.join(temp_table_folder, str(file_name)))
 		logger.info(temp_table_folder + ' created')
 	except OSError as exc:  # Guard against race condition
 		if exc.errno != errno.EEXIST:
@@ -357,7 +362,7 @@ def clear_and_create_temp_folders(file_name, temp_table_folder='table', temp_tex
 
 	try:
 		logger.info('Creating ' + temp_text_folder + '...')
-		os.mkdir(os.path.join(temp_text_folder, str(file_name)))
+		os.makedirs(os.path.join(temp_text_folder, str(file_name)))
 		logger.info(temp_text_folder + ' created')
 	except OSError as exc:  # Guard against race condition
 		if exc.errno != errno.EEXIST:
@@ -365,7 +370,7 @@ def clear_and_create_temp_folders(file_name, temp_table_folder='table', temp_tex
 			raise
 
 
-def write_crops(file_name, cropped_tables=None, cropped_text=None, temp_table_path='tables', temp_text_path='text'):
+def write_crops(file_name, cropped_tables=None, cropped_text=None, temp_table_path=TABLE_TEMP_FOLDER, temp_text_path=TEXT_TEMP_FOLDER, page_number=None):
 	"""
 	Writes table and text images under table and text folder
 
@@ -378,9 +383,12 @@ def write_crops(file_name, cropped_tables=None, cropped_text=None, temp_table_pa
 	"""
 	i = 0
 	logger.info('Writing cropped tables...')
+	table_paths = []
+	text_path = None
 	if cropped_tables is not None:
 		for ct in cropped_tables:
-			new_file_path = os.path.join(temp_table_path, str(file_name), 'table_' + str(i) + '.jpeg')
+			new_file_path = \
+				os.path.join(temp_table_path, str(file_name), 'table_pag_{pag_num}_{c}.jpeg'.format(pag_num=page_number, c=i))
 			ct = ct.convert('L')
 			logger.info('Deskewing table...')
 			sd = deskew.Deskew(
@@ -391,21 +399,23 @@ def write_crops(file_name, cropped_tables=None, cropped_text=None, temp_table_pa
 			logger.info('Deskew done')
 			ct = Image.fromarray(de_skewed_image_np)
 			ct = ct.convert(mode='L')
-			ct.save(new_file_path)
+			ct.save(new_file_path, dpi=(EXTRACTION_DPI, EXTRACTION_DPI))
 			i += 1
+			table_paths.append(new_file_path)
 		logger.info('Writing cropped tables done.')
 	else:
 		logger.info('No tables to write on disk')
 
 	if cropped_text is not None:
-		i = 0
 		logger.info('Writing cropped text...')
-		for cl in cropped_text:
-			new_file_path = os.path.join(temp_text_path, str(file_name), 'text_' + str(i) + '.jpeg')
-			ct_l = cl.convert('L')
-			ct_l.save(new_file_path)
-			i += 1
+		# for cl in cropped_text:
+		new_file_path = os.path.join(temp_text_path, str(file_name), 'text_pag_{}.jpeg'.format(page_number))
+			# ct_l = cl.convert('L')
+		cropped_text.save(new_file_path, dpi=(EXTRACTION_DPI, EXTRACTION_DPI))
+			# i += 1
 		logger.info('Writing cropped text done.')
+		text_path = new_file_path
+	return table_paths, text_path
 
 
 def main_batch():
@@ -415,7 +425,7 @@ def main_batch():
 		file_name = os.path.splitext(path_to_image)[0] \
 			.split("\\")[-1]
 		print('Now processing: ' + str(file_name))
-		clear_and_create_temp_folders(file_name=file_name)
+		create_temp_folders(file_name=file_name)
 		pil_image = Image.open(path_to_image)
 		cropped_tables, cropped_text = extract_tables_and_text(pil_image=pil_image, inference_graph_path=PATH_TO_CKPT)
 		write_crops(
@@ -429,7 +439,7 @@ PATH_TO_CKPT = '../TableTrainNet/data/frozen_inference_graph_momentum.pb'
 PATH_TO_IMAGES = './PDFs/'
 
 
-def find_table(file_name, pil_image, create_temp_files=False, temp_table_path='tables', temp_text_path='text'):
+def find_table(file_name, pil_image, create_temp_files=False, temp_table_path=TABLE_TEMP_FOLDER, temp_text_path=TEXT_TEMP_FOLDER):
 	"""
 	useful only for batch. The function extract_tables_and_text does everything
 	:param file_name:
@@ -441,7 +451,7 @@ def find_table(file_name, pil_image, create_temp_files=False, temp_table_path='t
 	"""
 	cropped_tables, cropped_text = extract_tables_and_text(pil_image=pil_image, inference_graph_path=PATH_TO_CKPT)
 	if create_temp_files:
-		clear_and_create_temp_folders(file_name=file_name)
+		create_temp_folders(file_name=file_name)
 		write_crops(
 			file_name=file_name,
 			cropped_tables=cropped_tables,
