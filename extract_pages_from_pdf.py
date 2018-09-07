@@ -1,290 +1,260 @@
+"""
+The first step of the pipeline lead us to generate good images from pdf to do inference and OCR.
+To avoid memory leak - as the user can upload very large pdf files - I've decided to use tue utility
+pdftoppm and access one page at a once.
+Then the pages are beautified - this part can be better, since the only thing I do here is deskewing pages
+In particular, for deskewing object a personalized version of alyn has been created and must be installed
+from wheels/alyn-xxx.whl: now it is possible to load, deskew and retrieve a numpy image without writing it
+on disk.
+If needed the user can write resulting images on disk.
+"""
 from PIL import Image
 from alyn import deskew
 import os
 import errno
 import numpy as np
-import shutil
-import cv2
-import logging
-from logger import TimeHandler
-from costants import EXTRACTION_DPI, TEMP_IMG_FOLDER_FROM_PDF, TEXT_TEMP_FOLDER, TABLE_TEMP_FOLDER
+from costants import \
+    EXTRACTION_DPI, \
+    TEMP_IMG_FOLDER_FROM_PDF, \
+    PATH_TO_EXTRACTED_IMAGES, \
+    TEST_PDF_PATH
 from subprocess import Popen, PIPE, STDOUT
 import copy
 
+import logging
+from logger import TimeHandler
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-# file_name = 'pipeline-' + str(0) + '.log'
 logger.addHandler(TimeHandler().handler)
-# logger.info('Hello baby')
-
-# import argparse
-#
-# parser = argparse.ArgumentParser(description='Path to input pdf file')
-# parser.add_argument('--pdf_path', dest='pdf_path', help='the complete path to your pdf file')
-# args = parser.parse_args()
 
 
-def clear_and_create_create_temp_folders(file_name, temp_path='temp'):
-	logger.info('Clear and create temp file for images from pdf')
-	try:
-		os.makedirs(temp_path)
-		logger.info('Folder created successfully')
-	except OSError as exc:  # Guard against race condition
-		if exc.errno != errno.EEXIST:
-			logger.warning('Parent folder was not created correctly. Probably already present')
-			raise
-
-	if os.path.isdir(os.path.join(temp_path, str(file_name))):
-		logger.info('Deleting not empty temp folder')
-		shutil.rmtree(os.path.join(temp_path, str(file_name)), ignore_errors=True)
-	try:
-		os.makedirs(os.path.join(temp_path, str(file_name)))
-		logger.info('Subfolder of parent created successfully')
-	except OSError as exc:  # Guard against race condition
-		if exc.errno != errno.EEXIST:
-			logger.warning('Child folder was not created correctly. Probably already present')
-			raise
+def clear_and_create_temp_folders(path_to_folder=PATH_TO_EXTRACTED_IMAGES):
+    """
+    Create a folder with file name to store images extracted from pdf. If path exists it is deleted and then re-created
+    :param path_to_folder: path/to/folder in which to store images.
+    :return void
+    """
+    logger.info('Clear and create temp file for images from pdf')
+    try:
+        os.makedirs(path_to_folder)
+        logger.info('Folder created successfully')
+    except OSError as exc:  # Guard against race condition
+        if exc.errno != errno.EEXIST:
+            logger.warning(os.path.join('{path}\nwas not created correctly.'
+                                       .format(path=path_to_folder)))
+            raise OSError
+        else:
+            logger.info('Folder exists')
 
 
-def write_image_on_temp_file(file_name, image_np, counter=0, temp_path='temp'):
-	logger.info('Writing temp images on disk...')
-	image_filename = os.path.join(str(file_name), '_page_' + str(counter) + '.jpeg')
-	cv2.imwrite(
-		filename=os.path.join(temp_path, image_filename),
-		img=image_np
-	)
-	logger.info('Image_ ' + str(counter) + 'wrote on disk')
+def write_image_on_disk(file_name, pil_image, page=0, path=PATH_TO_EXTRACTED_IMAGES):
+    """
+    Writes image on disk
+    :param file_name: name of original file
+    :param pil_image: numpy array greyscale image
+    :param page: page counter from upward function.
+    :param path: path/to/folder where to write images
+    :return:
+    """
+    logger.info('Writing temp images on disk...')
+    path_to_image = os.path.join(path, '{fn}_page_{c}.jpeg'.format(fn=file_name, c=page))
+
+    pil_image.save(path_to_image, dpi=(EXTRACTION_DPI, EXTRACTION_DPI))
+
+    logger.info('Image_{} wrote on disk'.format(page))
 
 
-def from_pdf_to_pil_list_images(file_path, thread_name=None):
-	"""
-	Create a page generator from pdf to make it load less RAM as it takes one page at a once
-	:param file_path:
-	:return: image generator from pdf
-	"""
-	flag = True
-	first_page = 1
-	last_page = 1
-	logger.info("Creating page generator from " + str(file_path) + "...")
-	if not os.path.isdir(TEMP_IMG_FOLDER_FROM_PDF):
-		try:
-			os.makedirs(TEMP_IMG_FOLDER_FROM_PDF)
-		except OSError as exc:  # Guard against race condition
-			if exc.errno != errno.EEXIST:
-				raise
+def from_pdf_to_pil_generator(file_path, temp_folder=TEMP_IMG_FOLDER_FROM_PDF, thread_name=None):
+    """
+    Create a page generator from pdf to make it load less RAM as it takes one page at a once. It read a page at once from
+    pdf, then acquire it in RAM and offer as generator.
+    It temporarly write the image in temp_folder, then it delete it automatically
+    :param file_path: path/to/file.pdf
+    :param thread_name: name of the thread in case of batch process
+    :param temp_folder: path/to/folder to store temp image before acquiring it in RAM
+    :return: PIL generator. Return None if nothing is found
+    """
+    try:
+        # logger.info('Checking if file exists...')
+        os.path.isfile(file_path)
+    except FileNotFoundError:
+        return None
 
-	while True:
+    page = 1
+    # logger.info("Creating page generator from {path}...".format(path=file_path))
+    if not os.path.isdir(temp_folder):
+        try:
+            os.makedirs(temp_folder)
+        except OSError as exc:  # Guard against race condition
+            if exc.errno != errno.EEXIST:
+                raise OSError
+            else:
+                logger.info('{} already exists. No need to create it'.format(temp_folder))
+    # Extract one page at a once. The iterator goes from first page to last until it reaches the end. In that case a
+    # StopIteraton is raised.
+    # Uses pdftoppm
+    while True:
 
-		args = [
-			"pdftoppm",
-			"-l",
-			str(first_page),
-			"-f",
-			str(last_page),
-			"-r",
-			str(EXTRACTION_DPI),
-			"-gray",
-			file_path,
-			os.path.join(TEMP_IMG_FOLDER_FROM_PDF, "temp-{tn}".format(tn=thread_name))
-		]
+        args = [
+            "pdftoppm",
+            "-l",
+            str(page),
+            "-f",
+            str(page),
+            "-r",
+            str(EXTRACTION_DPI),
+            "-gray",
+            file_path,
+            os.path.join(temp_folder, "temp-{}".format(thread_name))
+        ]
 
-		# args.append(item for item in config_list)
+        # args.append(item for item in config_list)
 
-		proc = Popen(
-			args,
-			stdin=PIPE,
-			stdout=PIPE,
-			stderr=STDOUT,
-			# cwd=os.path.join(TEMP_IMG_FOLDER_FROM_PDF)
-		)
-		output, outerr = proc.communicate()
+        proc = Popen(
+            args,
+            stdin=PIPE,
+            stdout=PIPE,
+            stderr=STDOUT,
+            # cwd=os.path.join(temp_folder)
+        )
+        output, outerr = proc.communicate()
 
-		if proc.returncode == 0:
-			# Everything went well
-			logger.info("page: {}"
-							.format(first_page) + 'successfully extracted')
-			if first_page < 10:
-				fp = os.path.join(TEMP_IMG_FOLDER_FROM_PDF, 'temp-{tn}-{n}.pgm'.format(n=first_page, tn=thread_name))
-				if not os.path.isfile(fp):
-					fp = os.path.join(TEMP_IMG_FOLDER_FROM_PDF, 'temp-{tn}-0{n}.pgm'.format(n=first_page, tn=thread_name))
-					if not os.path.isfile(fp):
-						fp = os.path.join(TEMP_IMG_FOLDER_FROM_PDF, 'temp-{tn}-00{n}.pgm'.format(n=first_page, tn=thread_name))
-					else:
-						logging.error('Something went wrong...')
-			elif 11 <= first_page <= 100:
-				fp = os.path.join(TEMP_IMG_FOLDER_FROM_PDF, 'temp-{tn}-{n}.pgm'.format(n=first_page, tn=thread_name))
-				if not os.path.isfile(fp):
-					fp = os.path.join(TEMP_IMG_FOLDER_FROM_PDF, 'temp-{tn}-0{n}.pgm'.format(n=first_page, tn=thread_name))
-				else:
-					logging.error('Something went wrong...')
-			else:
-				fp = os.path.join(TEMP_IMG_FOLDER_FROM_PDF, 'temp-{tn}-{n}.pgm'.format(n=first_page, tn=thread_name))
+        if proc.returncode == 0:
+            # Everything went well
+            logger.info("page: {}"
+                        .format(page) + 'successfully extracted')
+            # checking if the number of pages goes up to 999 pages. In the case that the number of pages is > 10,
+            # the temp file number of the first page will be 01 instead of 1. If num_pages > 100, then 001 instead of 1.
+            # here we check if temp file exists, if not we check the 01 one and so on.
+            fp = os.path.join(temp_folder, 'temp-{tn}-{n}.pgm'.format(n=page, tn=thread_name))
+            if page < 10:
+                if not os.path.isfile(fp):
+                    fp = os.path.join(temp_folder,
+                                      'temp-{tn}-0{n}.pgm'.format(n=page, tn=thread_name))
+                    if not os.path.isfile(fp):
+                        fp = os.path.join(temp_folder,
+                                          'temp-{tn}-00{n}.pgm'.format(n=page, tn=thread_name))
 
-			# print(fp)
-			img = Image.open(fp)
-			img = copy.deepcopy(img)
-			if os.path.exists(fp):
-				os.remove(fp)
-			img.convert(mode='L')
-			yield img
-			first_page += 1
-			last_page += 1
+            elif 11 <= page <= 100:
+                if not os.path.isfile(fp):
+                    fp = os.path.join(temp_folder,
+                                      'temp-{tn}-0{n}.pgm'.format(n=page, tn=thread_name))
 
-		else:
-			if outerr is None:
-				guessed_output = "b'Wrong page range given: the first page ({initial_page}) can not be after " \
-									  "the last page ({initial_page_1}).\\r\\n'" \
-					.format(initial_page=first_page, initial_page_1=first_page - 1)
-				if "{}".format(output) == guessed_output:
-					logger.info('Reached end of file.')
-				else:
-					logger.warning('Something went wrong...')
-					logger.warning('Tesseract output: {}'.format(output))
-			else:
-				logger.error("Error while extracting pdf page at {}".format(first_page))
-				logger.error("Tesseract Output: {}".format(output))
-				logger.error("Tesseract Error: {}".format(outerr))
-			raise StopIteration
+            try:
+                img = Image.open(fp)
+            except FileNotFoundError as e:
+                logger.error('Error while opening temp image with pillow: {}'.format(e))
+                return None
+            # explicit copy of image so we can delete it from disk safely
+            img = copy.deepcopy(img)
+            if os.path.exists(fp):
+                os.remove(fp)
+            # convert image to greyscale mode
+            img.convert(mode='L')
+            page += 1
+            # return it as a generator
+            yield img
 
-
-
-	# load all pages in lowest res to count the pages
-	# with tempfile.TemporaryDirectory() as path:
-	# images = convert_from_path(file_path, dpi=1)
-	# num_pages = len(images)
-	# delete var to free ram
-	# del images
-	# read one page at a once.
-	# for n in range(50):
-	# 	img = convert_from_path(
-	# 		file_path,
-	# 		dpi=EXTRACTION_DPI,
-	# 		first_page=n,
-	# 		last_page=n,
-	# 		thread_count=1
-	# 		output_folder=path
-		# )
-		# yield img[0]
-	# for img in images:
-	# 	logger.info('Generator created')
-	# 	yield img
+        # case mostly used for stopping iteration when EOF
+        else:
+            if outerr is None:
+                logger.warning('pdftoppm output: {}'.format(output))
+                logger.warning('Probably reached end of file.')
+                raise StopIteration
+            else:
+                logger.warning('Something went wrong...')
+                logger.warning('pdftoppm output: {}'.format(output))
+                logger.warning('pdftoppm error: {}'.format(outerr))
+                return None
 
 
-def beautify_pages(page_generator, create_temp_folder=False, temp_path='temp', file_name=None):
-	# print('Generating images from PDF...')
-	# logger.info('Generating images from PDF...')
-	# all_pages = wImage(filename=file_path, resolution=300)
-	# all_pages = page_generator(file_path)
-	# logger.info('All pages converted from pdf')
-	# bw_pil_list = []
-	logger.info('Converting images in greyscale...')
-	counter = 0
-	for page in page_generator:
-		page = page.convert(
-			mode='L'
-		)
-		# bw_pil_list.append(pg)
-		logger.info('Page converted to greyscale')
-		# load image as np for beautifying
-		logger.info('Beautifying image...')
-		image_np = np.asarray(page)
-		beautified_image_np = beautify_image(image_np)
-		logger.info('Image beautified')
-		if create_temp_folder:
-			logger.info('Creating temp files...')
-			write_image_on_temp_file(file_name, beautified_image_np, counter, temp_path)
-			logger.info('Temp files created.')
+def beautify_pages(page_generator):
+    """
+    Function to beautify pages for inference.
+    :param page_generator: list of pillow images
+    :return: beautified list of pages
+    """
+    for page in page_generator:
+        # if page was not converted to greyscale yet
+        page = page.convert(
+            mode='L'
+        )
+        logger.info('Page converted to greyscale')
+        # load image as np for beautifying
+        logger.info('Beautifying pages...')
+        # I decided to make another function to beautify a single page at a once avoiding correlation
+        image_np = np.asarray(page)
+        image_np = beautify_image(image_np)
+        page = Image.fromarray(image_np).convert('L')
+        logger.info('Pages beautified')
 
-	# return b/w pil generator
-		yield page
-
-
-# def beautify_pages(bw_pil_list, create_temp_folder=False, temp_path='temp', file_name=None):
-# 	"""
-# 	Do some modifications to the pil list to make recognition work better
-# 	:param bw_pil_list:
-# 	:param create_temp_folder:
-# 	:param temp_path:
-# 	:param file_name:
-# 	:return:
-# 	"""
-# 	logger.info('Making pages looks better for recognition...')
-# 	# run beautifier over image blobs
-# 	pil_beautified_images = []
-# 	counter = 0
-# 	for image in bw_pil_list:
-# 		counter = counter + 1
-# 		image_np = np.asarray(image)
-# 		logger.info('Beautifying page ' + str(counter))
-# 		beautified_image_np = beautify_image(image_np)
-# 		pil_beautified_images.append(Image.fromarray(beautified_image_np))
-#
-# 		if create_temp_folder:
-# 			logger.info('Creating temp files...')
-# 			write_image_on_temp_file(file_name, beautified_image_np, counter, temp_path)
-# 			logger.info('Temp files created.')
-#
-# 	return pil_beautified_images
+        # return b/w pil generator
+        yield page
 
 
 def beautify_image(np_array_image):
-	"""
-	Do some modifications to images
-	:param np_array_image:
-	:return: np_array_image
-	"""
-	logger.info('Beautifying images...')
-	# threshold = cv2.threshold(np_array_image, 150, 255, cv2.THRESH_BINARY)[1]
-	# threshold = cv2.medianBlur(threshold, 3)
-	#
-	# threshold = cv2.adaptiveThreshold(np_array_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 25, 8)
-	# deskewing images:
-	logger.info('Doing deskew...')
-	sd = deskew.Deskew(
-		input_numpy=np_array_image,
-		output_numpy=True
-	)
-	de_skewed_image_np = sd.run()
-	logger.info('Deskew done.')
-	to_return = de_skewed_image_np
-	logger.info('Image beautified.')
-	return to_return
+    """
+    Do some modifications to images. This is the right place to put background noise removal, for example.
+    Here we only de-skew images to help OCR and table recognition later
+    :param np_array_image: input numpy array image
+    :return: a beautified numpy array image
+    """
+    logger.info('Beautifying images...')
+
+    logger.info('Doing deskew...')
+    sd = deskew.Deskew(
+        input_numpy=np_array_image,
+        output_numpy=True
+    )
+    de_skewed_image_np = sd.run()
+    logger.info('Deskew done.')
+
+    to_return = de_skewed_image_np
+    logger.info('Image beautified.')
+    return to_return
 
 
-def generate_pil_images_from_pdf(file_path, create_temp_folder=False, temp_path='temp', thread_name=None):
-	"""
-	Takes a pdf file and convert it to jpeg bw images. create_temp_folder decide to write images to temp_path path.
-	:param file_path: /path/to/pdf.pdf
-	:param create_temp_folder: True/False. For development use. Using pillow images in a pipeline it is not needed
-	:param temp_path: /path/to/tempfiles. It is not deleted automatically
-	:return: pillow images list of betterified images of pdf
-	"""
-	file_name = os.path.splitext(file_path)[0] \
-		.split("\\")[-1]
-	if create_temp_folder:
-		logger.info('Creating temp folder...')
-		clear_and_create_create_temp_folders(file_name)
-		logger.info('Temp folder created')
-	pil_gen = from_pdf_to_pil_list_images(file_path, thread_name=thread_name)
-	# bar = pyprind.ProgPercent(len(pil_gen), track_time=True, title='Processing images...', stream=sys.stdout)
-	# bar.update()
-	bw_beautified_pil_gen = beautify_pages(
-		page_generator=pil_gen,
-		create_temp_folder=create_temp_folder,
-		temp_path=temp_path,
-		file_name=file_name
-	)
-	logging.info('Extraction of pages from pdf completed')
-	# print('Fin qui tutto bene')
-	return bw_beautified_pil_gen
+def generate_pil_images_from_pdf(file_path, temp_path=TEMP_IMG_FOLDER_FROM_PDF, thread_name='',
+                                 extraction_path=PATH_TO_EXTRACTED_IMAGES):
+    """
+    Takes a pdf file and offer it as a generator of pillow 8-bit greyscale single channel images.
+    :param file_path: /path/to/pdf.pdf
+    :param temp_path: /path/to/tempfiles.
+    :param thread_name: name of referring thread
+    :param extraction_path: default is None, path/to/folder to save the result of beautified images on disk
+    :return: pillow images list of betterified images of pdf
+    """
+
+    file_name = os.path.basename(file_path).split('.')[0]
+
+    # clear temp path to store the extracted pages
+    # effectively extract pages
+    pil_gen = from_pdf_to_pil_generator(file_path, thread_name=thread_name, temp_folder=temp_path)
+    # beautify pages before do inference on them. Possibility to write result on disk
+    bw_beautified_pil_gen = beautify_pages(page_generator=pil_gen)
+    # logger.info('Extraction of pages from pdf completed')
+    if extraction_path is not None:
+        destination_folder = os.path.join(extraction_path, file_name)
+        logger.info('Creating folder: {}'.format(destination_folder))
+        clear_and_create_temp_folders(path_to_folder=destination_folder)
+        logger.info('Temp folder created')
+        # create a deep copy of generator since the for loops consume generators
+        # copy_of_pil_gen = copy.deepcopy(bw_beautified_pil_gen)
+        counter = 0
+        logger.info('Writing images on disk')
+        for img in bw_beautified_pil_gen:
+            write_image_on_disk(file_name, img, counter, path=destination_folder)
+            counter += 1
+            yield img
+    else:
+        return bw_beautified_pil_gen
 
 
-
-# generate_pil_images_from_pdf(
-# 	file_path=file_path,
-# 	create_temp_folder=True,
-# 	temp_path='temp'
-# )
-
-
+if __name__ == '__main__':
+    generator = generate_pil_images_from_pdf(
+        file_path=TEST_PDF_PATH,
+        temp_path=TEMP_IMG_FOLDER_FROM_PDF,
+        extraction_path=PATH_TO_EXTRACTED_IMAGES
+    )
+    for image in generator:
+        print(image)

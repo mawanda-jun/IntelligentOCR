@@ -1,5 +1,5 @@
 import os
-from costants import TEXT_TEMP_FOLDER
+from costants import TEXT_FOLDER
 from PIL import Image as Image
 import glob
 import errno
@@ -8,7 +8,7 @@ import numpy as np
 import cv2
 
 
-def do_ocr_to_text(pil_image, file_name, output_folder=TEXT_TEMP_FOLDER):
+def do_ocr_to_text(pil_image, file_name, output_folder=TEXT_FOLDER):
 	# Define config parameters.
 	# '-l eng'  for using the English language
 	# '--oem 1' for using LSTM OCR Engine
