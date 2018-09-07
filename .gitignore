@@ -1,6 +1,6 @@
 PDFs/
-.idea/
-test/
+.idea
+test
 table/
 text/
 temp/
