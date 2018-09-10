@@ -39,7 +39,7 @@ consider very imprecise boxes, which have some _kind of idea_ of where the boxes
 2. Then **merge all vertical overlapping boxes**: if a box is overlapping another one there is good probability
 that both of them are looking at the same table. So merging them - considering the min `y_min` and the max `y_max` of
 the two - let me increase accuracy;
-3. Crop widely: since tables are in single-column with no inline text I could consider only 2 parameters out of 4
+3. **Crop widely**: since tables are in single-column with no inline text I could consider only 2 parameters out of 4
 (`y_min` and `y_max` and not `x_min` and `x_max`). This let me reduce inference error.
 
 Then **no**, it is not a black box at all.
