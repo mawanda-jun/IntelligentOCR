@@ -1,4 +1,3 @@
-import os
 from extract_pages_from_pdf import generate_pil_images_from_pdf
 from find_table import extract_tables_and_text, write_crops, create_temp_folders
 from tesseract_tabula_on_tables import do_tesseract_on_tables
@@ -9,19 +8,18 @@ from costants import \
     TEXT_FOLDER, \
     TABLE_FOLDER, \
     TEMP_IMG_FOLDER_FROM_PDF
+from io import StringIO
+import os
 from memory_profiler import profile
-# import glob
 import logging
 from logger import TimeHandler
-
-from io import StringIO
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 logger.addHandler(TimeHandler().handler)
 
-fp = None
+fp = StringIO()
 
 
 @profile(stream=fp)
@@ -39,6 +37,8 @@ def pipeline(pdf_path, inference_graph_path, thread_name=None):
     # cropped_text = []
     # cropped_tables = []
     page_number = 0
+    # create temp folders
+    create_temp_folders(pdf_name)
     for pil_image in bw_pil_gen:
         c_tables, c_text = extract_tables_and_text(
             pil_image=pil_image,
@@ -48,7 +48,7 @@ def pipeline(pdf_path, inference_graph_path, thread_name=None):
         # cropped_tables.extend(c_tables)
         # cropped_text.append(c_text)
         logger.info('Extraction of tables and text completed')
-        create_temp_folders(pdf_name)
+
         if not c_tables == []:
             table_paths, text_path = write_crops(
                 file_name=pdf_name,
@@ -60,7 +60,7 @@ def pipeline(pdf_path, inference_graph_path, thread_name=None):
             )
             for table_path in table_paths:
                 do_tesseract_on_tables(table_path, TABLE_FOLDER)
-            counter_table = 0
+            # counter_table = 0
             table_name = 'table_pag_{pag_num}'.format(pag_num=page_number)
             if page_number == 0:
                 if os.path.isfile(os.path.join(TABLE_FOLDER, pdf_name, table_name + '.txt')):
@@ -95,9 +95,9 @@ def pipeline(pdf_path, inference_graph_path, thread_name=None):
 
 
 if __name__ == '__main__':
-    fp = StringIO()
     pipeline(
         pdf_path=TEST_PDF_PATH,
         inference_graph_path=INFERENCE_GRAPH
     )
-    logger.info(fp)
+    logger.info(fp.getvalue())
+    fp.close()
