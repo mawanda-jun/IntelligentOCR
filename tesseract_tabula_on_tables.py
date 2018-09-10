@@ -23,7 +23,7 @@ def do_tesseract_on_tables(table_path, destination_pdf_path=TABLE_FOLDER):
     # takes only file name without extension
     input_file_name = os.path.basename(table_path).split(os.extsep)[0]
     # take the name of the folder in which the images are stored, that is the name of the original pdf
-    pdf_name = os.path.dirname(table_path).split(os.altsep)[-1]
+    pdf_name = os.path.dirname(table_path).split(os.path.sep)[-1]
     input_file = table_path
     # Define config parameters.
     # '-l eng'  for using the English language
@@ -41,13 +41,13 @@ def do_tesseract_on_tables(table_path, destination_pdf_path=TABLE_FOLDER):
         *config_list,  # extract all parameters inside this array
         'pdf'
     ]
-
+    start_folder = os.path.join(destination_pdf_path, pdf_name)
     proc = Popen(
         args,
         stdin=PIPE,
         stdout=PIPE,
         stderr=STDOUT,
-        cwd=os.path.join(destination_pdf_path, pdf_name)
+        cwd=start_folder
     )
     # do the actual job on CL
     output, outerr = proc.communicate()
