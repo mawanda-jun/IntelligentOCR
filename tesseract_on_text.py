@@ -5,6 +5,13 @@ import pytesseract
 
 
 def do_ocr_to_text(pil_image, file_name, output_folder=TEXT_FOLDER):
+    """
+    Takes an image and do ocr on it.
+    :param pil_image: pillow image of text
+    :param file_name: name of pdf original file
+    :param output_folder: /path/to/output_file
+    :return:
+    """
     # Define config parameters.
     # '-l eng'  for using the English language
     # '--oem 1' for using LSTM OCR Engine
@@ -22,7 +29,7 @@ def do_ocr_to_text(pil_image, file_name, output_folder=TEXT_FOLDER):
             if exc.errno != errno.EEXIST:
                 raise
 
-    # write the output file
-    with open(os.path.join(output_folder, file_name + '.txt'), 'a', encoding='utf-8') as result:
+    # write the output file, appending to the existing one
+    with open(os.path.join(output_folder, '{}.txt'.format(file_name)), 'a', encoding='utf-8') as result:
         result.write(txt)
 # print(line)

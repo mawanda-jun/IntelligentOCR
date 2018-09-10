@@ -7,8 +7,6 @@ import tabula
 from logger import TimeHandler
 import logging
 
-from PIL import Image
-
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -34,22 +32,16 @@ def do_tesseract_on_tables(table_path, destination_pdf_path=TABLE_FOLDER):
     # '--psm 12' for sparse text with OSD. 3 is default and it's not working bad.
 
     config = '-l ita --oem 1 --psm 12 pdf'
-    config_list = config.split(' ')
-
-    img = Image.open(input_file)
-    print(img.size)
+    config_list = config.split(' ')  # make a list of parameters
 
     args = [
         "tesseract",
         input_file,  # actual file to be analyzed
         input_file_name,  # output file name
-        *config_list,
+        *config_list,  # extract all parameters inside this array
         'pdf'
     ]
 
-    # args.append(item for item in config_list)
-
-    print(args)
     proc = Popen(
         args,
         stdin=PIPE,
@@ -57,14 +49,17 @@ def do_tesseract_on_tables(table_path, destination_pdf_path=TABLE_FOLDER):
         stderr=STDOUT,
         cwd=os.path.join(destination_pdf_path, pdf_name)
     )
+    # do the actual job on CL
     output, outerr = proc.communicate()
 
     if proc.returncode == 0:
         # Everything went well
         logger.info("pdf was successfully extracted from: {}".format(input_file_name))
         logger.info('Tesseract output: {}'.format(output))
-        tabula_input_path = os.path.join(destination_pdf_path, pdf_name, str(input_file_name) + '.pdf')
-        tabula_output_path = os.path.join(destination_pdf_path, pdf_name, str(input_file_name) + '.csv')
+
+        # now extracting tables with tabula
+        tabula_input_path = os.path.join(destination_pdf_path, pdf_name, '{}.pdf'.format(input_file_name))
+        tabula_output_path = os.path.join(destination_pdf_path, pdf_name, '{}.csv'.format(input_file_name))
         tabula.convert_into(
             tabula_input_path,
             output_path=tabula_output_path,
@@ -73,6 +68,7 @@ def do_tesseract_on_tables(table_path, destination_pdf_path=TABLE_FOLDER):
         )
 
     else:
+        # something went wrong
         logger.error("Error while extracting pdf from {}".format(input_file))
         logger.error("Tesseract Output: {}".format(output))
         logger.error("Tesseract Error: {}".format(outerr))

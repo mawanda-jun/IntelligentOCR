@@ -1,6 +1,5 @@
 import os
 
-
 THREADS = 8
 EXTRACTION_DPI = 300
 TEMP_IMG_FOLDER_FROM_PDF = 'pdf_temp'
