@@ -1,7 +1,0 @@
-Passi da seguire per effettuare una buona lettura dal foglio pdf:
-
-1   Riconoscere se pdf stampato oppure scansionato (?)
-
-2   Riconoscere tabelle da testo con ML. Produrre pdf delle tabelle; eliminare tabelle dai pdf
-
-3   Eseguire tabula su tabelle; riconoscimento testo sul resto del testo;
