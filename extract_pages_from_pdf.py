@@ -154,6 +154,7 @@ def from_pdf_to_pil_generator(file_path, temp_folder=TEMP_IMG_FOLDER_FROM_PDF, t
             page += 1
             # return it as a generator
             yield img
+            # return img
 
         # case mostly used for stopping iteration when EOF
         else:
@@ -168,28 +169,40 @@ def from_pdf_to_pil_generator(file_path, temp_folder=TEMP_IMG_FOLDER_FROM_PDF, t
                 return None
 
 
-def beautify_pages(page_generator):
+def beautify_pages(page_generator, file_name, extraction_path=PATH_TO_EXTRACTED_IMAGES):
     """
     Function to beautify pages for inference.
     :param page_generator: list of pillow images
     :return: beautified list of pages
     """
+    counter = 0
     for page in page_generator:
         # if page was not converted to greyscale yet
-        page = page.convert(
+        page_grey = page.convert(
             mode='L'
         )
         logger.info('Page converted to greyscale')
         # load image as np for beautifying
         logger.info('Beautifying pages...')
         # I decided to make another function to beautify a single page at a once avoiding correlation
-        image_np = np.asarray(page)
-        image_np = beautify_image(image_np)
-        page = Image.fromarray(image_np).convert('L')
+        image_np = np.asarray(page_grey)
+        beautified_np = beautify_image(image_np)
+        page_grey = Image.fromarray(beautified_np).convert('L')
+        if extraction_path is not None:
+            destination_folder = os.path.join(extraction_path, file_name)
+            logger.info('Creating folder: {}'.format(destination_folder))
+            clear_and_create_temp_folders(path_to_folder=destination_folder)
+            logger.info('Temp folder created')
+            # create a deep copy of generator since the for loops consume generators
+            # copy_of_pil_gen = copy.deepcopy(bw_beautified_pil_gen)
+            logger.info('Writing images on disk')
+            write_image_on_disk(file_name, copy.deepcopy(page_grey), counter, path=destination_folder)
+            counter += 1
         logger.info('Pages beautified')
+        # page = page_grey
 
         # return b/w pil generator
-        yield page
+        yield page_grey
 
 
 def beautify_image(np_array_image):
@@ -231,23 +244,10 @@ def generate_pil_images_from_pdf(file_path, temp_path=TEMP_IMG_FOLDER_FROM_PDF, 
     # effectively extract pages
     pil_gen = from_pdf_to_pil_generator(file_path, thread_name=thread_name, temp_folder=temp_path)
     # beautify pages before do inference on them. Possibility to write result on disk
-    bw_beautified_pil_gen = beautify_pages(page_generator=pil_gen)
+    bw_beautified_pil_gen = beautify_pages(page_generator=pil_gen, file_name=file_name, extraction_path=extraction_path, )
     # logger.info('Extraction of pages from pdf completed')
-    if extraction_path is not None:
-        destination_folder = os.path.join(extraction_path, file_name)
-        logger.info('Creating folder: {}'.format(destination_folder))
-        clear_and_create_temp_folders(path_to_folder=destination_folder)
-        logger.info('Temp folder created')
-        # create a deep copy of generator since the for loops consume generators
-        # copy_of_pil_gen = copy.deepcopy(bw_beautified_pil_gen)
-        counter = 0
-        logger.info('Writing images on disk')
-        for img in bw_beautified_pil_gen:
-            write_image_on_disk(file_name, img, counter, path=destination_folder)
-            counter += 1
-            yield img
-    else:
-        return bw_beautified_pil_gen
+
+    return bw_beautified_pil_gen
 
 
 if __name__ == '__main__':
