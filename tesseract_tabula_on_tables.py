@@ -1,7 +1,8 @@
 from subprocess import Popen, PIPE, STDOUT
 import os
-from costants import TABLE_FOLDER
-import glob
+from costants import \
+    TABLE_FOLDER, \
+    TEST_TABLE_PATH
 import tabula
 from logger import TimeHandler
 import logging
@@ -14,18 +15,17 @@ logger.setLevel(logging.INFO)
 logger.addHandler(TimeHandler().handler)
 
 
-def do_tesseract_on_tables(table_path, temp_table_path=TABLE_FOLDER):
+def do_tesseract_on_tables(table_path, destination_pdf_path=TABLE_FOLDER):
     """
 
     :param table_path:
-    :param temp_table_path:
+    :param destination_pdf_path:
     :return:
     """
-    # for file in glob.iglob(os.path.join(temp_table_path, table_path) + '/**/*.jpeg', recursive=True):
-    input_file_name = os.path.splitext(table_path)[0] \
-        .split("\\")[-1]
-    pdf_name = os.path.splitext(table_path)[0] \
-        .split("\\")[-2]
+    # takes only file name without extension
+    input_file_name = os.path.basename(table_path).split(os.extsep)[0]
+    # take the name of the folder in which the images are stored, that is the name of the original pdf
+    pdf_name = os.path.dirname(table_path).split(os.altsep)[-1]
     input_file = table_path
     # Define config parameters.
     # '-l eng'  for using the English language
@@ -55,16 +55,16 @@ def do_tesseract_on_tables(table_path, temp_table_path=TABLE_FOLDER):
         stdin=PIPE,
         stdout=PIPE,
         stderr=STDOUT,
-        cwd=os.path.join(temp_table_path, pdf_name)
+        cwd=os.path.join(destination_pdf_path, pdf_name)
     )
     output, outerr = proc.communicate()
 
     if proc.returncode == 0:
         # Everything went well
-        logger.info("pdf was succesfully extracted from: {}".format(input_file_name))
+        logger.info("pdf was successfully extracted from: {}".format(input_file_name))
         logger.info('Tesseract output: {}'.format(output))
-        tabula_input_path = os.path.join(temp_table_path, pdf_name, str(input_file_name) + '.pdf')
-        tabula_output_path = os.path.join(temp_table_path, pdf_name, str(input_file_name) + '.csv')
+        tabula_input_path = os.path.join(destination_pdf_path, pdf_name, str(input_file_name) + '.pdf')
+        tabula_output_path = os.path.join(destination_pdf_path, pdf_name, str(input_file_name) + '.csv')
         tabula.convert_into(
             tabula_input_path,
             output_path=tabula_output_path,
@@ -79,4 +79,4 @@ def do_tesseract_on_tables(table_path, temp_table_path=TABLE_FOLDER):
 
 
 if __name__ == '__main__':
-    do_tesseract_on_tables('table\\glossario\\table_pag_0_0.jpeg', TABLE_FOLDER)
+    do_tesseract_on_tables(TEST_TABLE_PATH, TABLE_FOLDER)
