@@ -16,10 +16,13 @@ to extract tables from recognized tables.
 Before we go on make sure you have everything installed to be able to use the project:
 * [Tensorflow](https://www.tensorflow.org/)
 * Python 3
-* Pillow
+* [Tesseract](https://github.com/tesseract-ocr/tesseract)
+* pytesseract
+* PIL (pillow)
 * pandas
 * numpy
 * [pdftoppm](https://www.xpdfreader.com/pdftoppm-man.html)
+* [Tabula](https://github.com/tabulapdf/tabula-java) and its wrapper tabula-py
 
 In addition, a personalized version of
 [alyn](https://github.com/mawanda-jun/Alyn)
@@ -27,6 +30,9 @@ has been made, so you can install it from repository or from folder `wheel/alyn-
 
 ## Project pipeline
 The project is made up of different parts that acts together as a pipeline. As a matter of fact a `pipeline.py` file has been made an it contains all the scripts that transforms a `TEST_PDF_PATH` pdf into `path/to/TABLE_FOLDER/file.csv`s  files and `path/to/TEXT_FOLDER/text.txt` text. So if you do not understand something take a look at it.
+
+If you want to learn more about the motivation behind every project decision please take a look at `FAQ.md`
+file.
 
 #### Take confidence with costants
 The entire project can be manipulated changing only the `costants.py` file. More instructions are coming.
@@ -47,3 +53,48 @@ A generator of pages is returned if everything went OK, instead if something wen
 is the result. A `.log` file is always produced so you can see what went wrong.
 
 #### Find tables and text inside page
+This part takes as input a generator of Pillow images and a inference graph and returns two values:
+* List of tables, which are Pillow images cropped from original pages
+* A Pillow image which is the merge of what was not cropped
+
+The inference is done in four parts:
+1. First of all we have to find all the boxes with which the neural network says where the tables are and with which score;
+2. Analyze the scores to understand which are the best one;
+3. Interpret and merge the correct boxes;
+4. Crop original images and separate them into the two groups mentioned above.
+
+This part is made with `find_table.py`, in particular from `extract_tables_and_text` function
+and it uses those costants:
+* `MAX_NUM_BOXES`: max number of boxes to be considered before merge;
+* `MIN_SCORE`: minimum score of boxes to be considered before merge.
+
+#### Extract tables from table images
+Since I needed to reconstruct the tables structure I found that tabula was good to make the job done.
+Unfortunately the python wrapper takes a pdf searchable file and outputs a csv file for every table found.
+For this reason I need to create a searchable pdf file before proceeding in getting table structure.
+
+Now that we have the cropped images of tables, we can process them to get the structure and the data.
+
+We proceed to make OCR with Tesseract on image and to export a searchable pdf. Unfortunately
+its wrapper has no options to export file as pdf, so I needed to use the CL commands instead.
+We can manage this part with:
+* `TABLE_FOLDER`: /path/where/to/save/pdf/and/csv/files;
+* `TEST_TABLE_PATH`: /path/to/file.jpg from which to take the image to process.
+
+This will create a pdf file with the table and text recognized from it and a csv file with
+the table informations.
+
+#### Extract text from text images
+This part is the simplest one, since it simple take a pillow image and transform it to text.
+
+Use `do_ocr_to_text` from `tesseract_on_text.py` and customize costant:
+* `TEXT_FOLDER`: /path/to/folder in which to save text extracted from file.
+
+
+
+
+---
+---
+<sup>1</sup>. This is not yet implemented due to some problems with numpy arrays. Even if the training was done
+with this method, the inference seems not to understand anything from modified images - 2018/09/10
+ 
