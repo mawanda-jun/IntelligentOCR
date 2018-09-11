@@ -21,7 +21,7 @@ Before we go on make sure you have everything installed to be able to use the pr
 * PIL (pillow)
 * pandas
 * numpy
-* [pdftoppm](https://www.xpdfreader.com/pdftoppm-man.html)
+* pdftoppm
 * [Tabula](https://github.com/tabulapdf/tabula-java) and its wrapper tabula-py
 
 In addition, a personalized version of
