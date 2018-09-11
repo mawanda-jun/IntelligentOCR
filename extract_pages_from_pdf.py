@@ -18,6 +18,7 @@ from costants import \
     TEMP_IMG_FOLDER_FROM_PDF, \
     PATH_TO_EXTRACTED_IMAGES, \
     TEST_PDF_PATH
+from personal_errors import InputError, OutputError, APIError
 from subprocess import Popen, PIPE, STDOUT
 import copy
 
@@ -40,9 +41,11 @@ def clear_and_create_temp_folders(path_to_folder=PATH_TO_EXTRACTED_IMAGES):
         logger.info('Folder created successfully')
     except OSError as exc:  # Guard against race condition
         if exc.errno != errno.EEXIST:
-            logger.warning(os.path.join('{path}\nwas not created correctly.'
-                                       .format(path=path_to_folder)))
-            raise OSError
+            message = '{path}\nwas not created correctly.'\
+                                       .format(path=path_to_folder)
+            raise InputError(
+                message=message
+            )
         else:
             logger.info('Folder exists')
 
@@ -58,10 +61,13 @@ def write_image_on_disk(file_name, pil_image, page=0, path=PATH_TO_EXTRACTED_IMA
     """
     logger.info('Writing temp images on disk...')
     path_to_image = os.path.join(path, '{fn}_page_{c}.jpeg'.format(fn=file_name, c=page))
-
-    pil_image.save(path_to_image, dpi=(EXTRACTION_DPI, EXTRACTION_DPI))
-
-    logger.info('Image_{} wrote on disk'.format(page))
+    try:
+        pil_image.save(path_to_image, dpi=(EXTRACTION_DPI, EXTRACTION_DPI))
+        logger.info('Image_{} wrote on disk'.format(page))
+    except IOError or ValueError as e:
+        raise OutputError(
+            message='Cannot write image on disk: \n{}'.format(e)
+        )
 
 
 def from_pdf_to_pil_generator(file_path, temp_folder=TEMP_IMG_FOLDER_FROM_PDF, thread_name=None):
@@ -74,99 +80,103 @@ def from_pdf_to_pil_generator(file_path, temp_folder=TEMP_IMG_FOLDER_FROM_PDF, t
     :param temp_folder: path/to/folder to store temp image before acquiring it in RAM
     :return: PIL generator. Return None if nothing is found
     """
-    try:
-        # logger.info('Checking if file exists...')
-        os.path.isfile(file_path)
-    except FileNotFoundError:
-        return None
 
-    page = 1
-    # logger.info("Creating page generator from {path}...".format(path=file_path))
-    if not os.path.isdir(temp_folder):
-        try:
-            os.makedirs(temp_folder)
-        except OSError as exc:  # Guard against race condition
-            if exc.errno != errno.EEXIST:
-                raise OSError
-            else:
-                logger.info('{} already exists. No need to create it'.format(temp_folder))
-    # Extract one page at a once. The iterator goes from first page to last until it reaches the end. In that case a
-    # StopIteraton is raised.
-    # Uses pdftoppm
-    while True:
-
-        args = [
-            "pdftoppm",
-            "-l",
-            str(page),
-            "-f",
-            str(page),
-            "-r",
-            str(EXTRACTION_DPI),
-            "-gray",
-            file_path,
-            os.path.join(temp_folder, "temp-{}".format(thread_name))
-        ]
-
-        # args.append(item for item in config_list)
-
-        proc = Popen(
-            args,
-            stdin=PIPE,
-            stdout=PIPE,
-            stderr=STDOUT,
-            # cwd=os.path.join(temp_folder)
+    if not os.path.isfile(file_path):
+        raise InputError(
+            message='{} not found'.format(file_path)
         )
-        output, outerr = proc.communicate()
+    else:
+        page = 1
+        # logger.info("Creating page generator from {path}...".format(path=file_path))
+        if not os.path.isdir(temp_folder):
+            try:
+                os.makedirs(temp_folder)
+                logger.info('Temp folder for extraction written on disk')
+            except OSError as exc:  # Guard against race condition
+                if exc.errno != errno.EEXIST:
+                    raise OutputError(
+                        message=exc
+                    )
+                else:
+                    logger.info('{} already exists. No need to create it'.format(temp_folder))
+        # Extract one page at a once. The iterator goes from first page to last until it reaches the end. In that case a
+        # StopIteraton is raised.
+        # Uses pdftoppm
+        while True:
 
-        if proc.returncode == 0:
-            # Everything went well
-            logger.info("page: {}"
-                        .format(page) + 'successfully extracted')
-            # checking if the number of pages goes up to 999 pages. In the case that the number of pages is > 10,
-            # the temp file number of the first page will be 01 instead of 1. If num_pages > 100, then 001 instead of 1.
-            # here we check if temp file exists, if not we check the 01 one and so on.
-            fp = os.path.join(temp_folder, 'temp-{tn}-{n}.pgm'.format(n=page, tn=thread_name))
-            if page < 10:
-                if not os.path.isfile(fp):
-                    fp = os.path.join(temp_folder,
-                                      'temp-{tn}-0{n}.pgm'.format(n=page, tn=thread_name))
+            args = [
+                "pdftoppm",
+                "-l",
+                str(page),
+                "-f",
+                str(page),
+                "-r",
+                str(EXTRACTION_DPI),
+                "-gray",
+                file_path,
+                os.path.join(temp_folder, "temp-{}".format(thread_name))
+            ]
+
+            # args.append(item for item in config_list)
+
+            proc = Popen(
+                args,
+                stdin=PIPE,
+                stdout=PIPE,
+                stderr=STDOUT,
+                # cwd=os.path.join(temp_folder)
+            )
+            output, outerr = proc.communicate()
+
+            if proc.returncode == 0:
+                # Everything went well
+                logger.info("Page {} successfully extracted".format(page))
+                # checking if the number of pages goes up to 999 pages. In the case that the number of pages is > 10,
+                # the temp file number of the first page will be 01 instead of 1. If num_pages > 100, then 001 instead of 1.
+                # here we check if temp file exists, if not we check the 01 one and so on.
+                fp = os.path.join(temp_folder, 'temp-{tn}-{n}.pgm'.format(n=page, tn=thread_name))
+                if page < 10:
                     if not os.path.isfile(fp):
                         fp = os.path.join(temp_folder,
-                                          'temp-{tn}-00{n}.pgm'.format(n=page, tn=thread_name))
+                                          'temp-{tn}-0{n}.pgm'.format(n=page, tn=thread_name))
+                        if not os.path.isfile(fp):
+                            fp = os.path.join(temp_folder,
+                                              'temp-{tn}-00{n}.pgm'.format(n=page, tn=thread_name))
 
-            elif 11 <= page <= 100:
-                if not os.path.isfile(fp):
-                    fp = os.path.join(temp_folder,
-                                      'temp-{tn}-0{n}.pgm'.format(n=page, tn=thread_name))
+                elif 11 <= page <= 100:
+                    if not os.path.isfile(fp):
+                        fp = os.path.join(temp_folder,
+                                          'temp-{tn}-0{n}.pgm'.format(n=page, tn=thread_name))
 
-            try:
-                img = Image.open(fp)
-            except FileNotFoundError as e:
-                logger.error('Error while opening temp image with pillow: {}'.format(e))
-                return None
-            # explicit copy of image so we can delete it from disk safely
-            img = copy.deepcopy(img)
-            if os.path.exists(fp):
-                os.remove(fp)
-            # convert image to greyscale mode
-            img.convert(mode='L')
-            page += 1
-            # return it as a generator
-            yield img
-            # return img
+                try:
+                    img = Image.open(fp)
+                    # explicit copy of image so we can delete it from disk safely
+                    img = copy.deepcopy(img)
+                    if os.path.exists(fp):
+                        os.remove(fp)
+                    # convert image to greyscale mode
+                    img.convert(mode='L')
+                    page += 1
+                    # return it as a generator
+                    yield img
+                    # return img
+                except FileNotFoundError as e:
+                    raise InputError(
+                        message=e
+                    )
 
-        # case mostly used for stopping iteration when EOF
-        else:
-            if outerr is None:
-                logger.warning('pdftoppm output: {}'.format(output))
-                logger.warning('Probably reached end of file.')
-                raise StopIteration
+            # case mostly used for stopping iteration when EOF
             else:
-                logger.warning('Something went wrong...')
-                logger.warning('pdftoppm output: {}'.format(output))
-                logger.warning('pdftoppm error: {}'.format(outerr))
-                return None
+                if outerr is None:
+                    logger.warning('pdftoppm output: {}'.format(output))
+                    logger.warning('Probably reached end of file.')
+                    raise StopIteration
+                else:
+                    logger.error('Something went wrong...')
+                    logger.error('pdftoppm output: {}'.format(output))
+                    raise InputError(
+                        message='pdftoppm error: {}'.format(outerr)
+                    )
 
 
 def beautify_pages(page_generator, file_name, extraction_path=PATH_TO_EXTRACTED_IMAGES):
@@ -215,16 +225,22 @@ def beautify_image(np_array_image):
     logger.info('Beautifying images...')
 
     logger.info('Doing deskew...')
-    sd = deskew.Deskew(
-        input_numpy=np_array_image,
-        output_numpy=True
-    )
-    de_skewed_image_np = sd.run()
-    logger.info('Deskew done.')
+    try:
+        sd = deskew.Deskew(
+            input_numpy=np_array_image,
+            output_numpy=True
+        )
+        de_skewed_image_np = sd.run()
+        logger.info('Deskew done.')
 
-    to_return = de_skewed_image_np
-    logger.info('Image beautified.')
-    return to_return
+        to_return = de_skewed_image_np
+        logger.info('Image beautified.')
+        return to_return
+    except Exception as e:
+        # deskew is not so well implemented so I'm catching every exception
+        raise APIError(
+            message='Deskew is not performing well. Please check API\n{}'.format(e)
+        )
 
 
 def generate_pil_images_from_pdf(file_path, temp_path=TEMP_IMG_FOLDER_FROM_PDF, thread_name='',
@@ -235,16 +251,17 @@ def generate_pil_images_from_pdf(file_path, temp_path=TEMP_IMG_FOLDER_FROM_PDF, 
     :param temp_path: /path/to/tempfiles.
     :param thread_name: name of referring thread
     :param extraction_path: default is None, path/to/folder to save the result of beautified images on disk
-    :return: pillow images list of betterified images of pdf
+    :return: dict with: 'status': True if everything went good, False instead. Messages/data are inside 'data'
     """
 
     file_name = os.path.basename(file_path).split('.')[0]
-
     # clear temp path to store the extracted pages
     # effectively extract pages
     pil_gen = from_pdf_to_pil_generator(file_path, thread_name=thread_name, temp_folder=temp_path)
     # beautify pages before do inference on them. Possibility to write result on disk
-    bw_beautified_pil_gen = beautify_pages(page_generator=pil_gen, file_name=file_name, extraction_path=extraction_path, )
+    # with yield we cannot check if the status of the return is False or True,
+    # so we have to manage it inside beautify_pages
+    bw_beautified_pil_gen = beautify_pages(page_generator=pil_gen, file_name=file_name, extraction_path=extraction_path)
     # logger.info('Extraction of pages from pdf completed')
 
     return bw_beautified_pil_gen

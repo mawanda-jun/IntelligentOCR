@@ -6,6 +6,7 @@ from costants import \
     TABLE_FOLDER, \
     MAX_NUM_BOXES, \
     MIN_SCORE
+from personal_errors import InputError, OutputError
 import errno
 import tensorflow as tf
 from PIL import Image
@@ -48,6 +49,9 @@ def do_inference_with_graph(pil_image, inference_graph_path):
     """
     logger.info('Reading inference graph...')
     detection_graph = tf.Graph()
+    # checking if inference graph exists
+    if not os.path.isfile(inference_graph_path):
+        raise InputError('Inference graph at\n{}\nnot found'.format(inference_graph_path))
 
     with detection_graph.as_default():
         od_graph_def = tf.GraphDef()
@@ -350,11 +354,13 @@ def create_temp_folders(file_name, temp_table_folder=TABLE_FOLDER, temp_text_fol
         # creates folder for table images per page
         try:
             os.makedirs(temp_table_folder)
-            logger.info(temp_table_folder + ' folder created successfully')
+            logger.info('{} created successfully'.format(temp_table_folder))
         except OSError as exc:
             if exc.errno != errno.EEXIST:
-                logger.warning(temp_table_folder + ' folder was not created correctly. Probably already present')
-                raise
+                raise OutputError('{} was not created correctly.'
+                                  .format(temp_table_folder))
+            else:
+                logger.info('{} already present'.format(temp_table_folder))
 
     # creates folder for text images per page
     logger.info(temp_text_folder + ' folder created successfully')
@@ -362,9 +368,11 @@ def create_temp_folders(file_name, temp_table_folder=TABLE_FOLDER, temp_text_fol
         try:
             os.makedirs(temp_text_folder)
         except OSError as exc:
-            logger.info(temp_text_folder + ' folder was not created correctly. Probably already present')
             if exc.errno != errno.EEXIST:
-                raise
+                raise OutputError('{} was not created correctly.'
+                                  .format(temp_text_folder))
+            else:
+                logger.info('{} already present'.format(temp_text_folder))
 
     if os.path.isdir(os.path.join(temp_table_folder, str(file_name))):
         logger.info('Clearing table temp folder from existing files...')
@@ -376,22 +384,24 @@ def create_temp_folders(file_name, temp_table_folder=TABLE_FOLDER, temp_text_fol
         logger.info('Clear done')
 
     try:
-        logger.info('Creating ' + temp_table_folder + '...')
+        logger.info('Creating {}...'.format(temp_table_folder))
         os.makedirs(os.path.join(temp_table_folder, str(file_name)))
         logger.info(temp_table_folder + ' created')
     except OSError as exc:  # Guard against race condition
         if exc.errno != errno.EEXIST:
-            logger.info(temp_table_folder + ' was not created. Maybe already present')
-            raise
+            raise OutputError('{} was not created.'.format(temp_table_folder))
+        else:
+            logger.info('{} already present'.format(temp_table_folder))
 
     try:
-        logger.info('Creating ' + temp_text_folder + '...')
+        logger.info('Creating {}...'.format(temp_text_folder))
         os.makedirs(os.path.join(temp_text_folder, str(file_name)))
         logger.info(temp_text_folder + ' created')
     except OSError as exc:  # Guard against race condition
         if exc.errno != errno.EEXIST:
-            logger.info(temp_text_folder + ' was not created. Maybe already present')
-            raise
+            raise OutputError('{} was not created'.format(temp_text_folder))
+        else:
+            logger.info('{} already present'.format(temp_text_folder))
 
 
 def write_crops(file_name, cropped_tables=None, cropped_text=None, temp_table_path=TABLE_FOLDER,
@@ -425,7 +435,11 @@ def write_crops(file_name, cropped_tables=None, cropped_text=None, temp_table_pa
             logger.info('Deskew done')
             ct = Image.fromarray(de_skewed_image_np)
             ct = ct.convert(mode='L')
-            ct.save(new_file_path, dpi=(EXTRACTION_DPI, EXTRACTION_DPI))
+            try:
+                ct.save(new_file_path, dpi=(EXTRACTION_DPI, EXTRACTION_DPI))
+                logger.info('Image_{} wrote on disk'.format(new_file_path))
+            except IOError or ValueError as e:
+                raise OutputError('Cannot write image on disk: \n{}'.format(e))
             i += 1
             table_paths.append(new_file_path)
         logger.info('Writing cropped tables done.')
@@ -437,7 +451,11 @@ def write_crops(file_name, cropped_tables=None, cropped_text=None, temp_table_pa
         # for cl in cropped_text:
         new_file_path = os.path.join(temp_text_path, str(file_name), 'text_pag_{}.jpeg'.format(page_number))
         # ct_l = cl.convert('L')
-        cropped_text.save(new_file_path, dpi=(EXTRACTION_DPI, EXTRACTION_DPI))
+        try:
+            cropped_text.save(new_file_path, dpi=(EXTRACTION_DPI, EXTRACTION_DPI))
+            logger.info('Image_{} wrote on disk'.format(new_file_path))
+        except IOError or ValueError as e:
+            raise OutputError('Cannot write image on disk: \n{}'.format(e))
         # i += 1
         logger.info('Writing cropped text done.')
         text_path = new_file_path

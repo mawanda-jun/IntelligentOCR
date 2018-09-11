@@ -3,6 +3,7 @@ import os
 from costants import \
     TABLE_FOLDER, \
     TEST_TABLE_PATH
+from personal_errors import InputError, OutputError
 import tabula
 from logger import TimeHandler
 import logging
@@ -24,6 +25,9 @@ def do_tesseract_on_tables(table_path, destination_pdf_path=TABLE_FOLDER):
     input_file_name = os.path.basename(table_path).split(os.extsep)[0]
     # take the name of the folder in which the images are stored, that is the name of the original pdf
     pdf_name = os.path.dirname(table_path).split(os.path.sep)[-1]
+    # checking if file exists
+    if not os.path.isfile(table_path):
+        raise InputError('{} not found'.format(table_path))
     input_file = table_path
     # Define config parameters.
     # '-l eng'  for using the English language
@@ -59,19 +63,25 @@ def do_tesseract_on_tables(table_path, destination_pdf_path=TABLE_FOLDER):
 
         # now extracting tables with tabula
         tabula_input_path = os.path.join(destination_pdf_path, pdf_name, '{}.pdf'.format(input_file_name))
+        if not os.path.isfile(tabula_input_path):
+            raise InputError('{} was not found. Maybe was not created?'.format(tabula_input_path))
         tabula_output_path = os.path.join(destination_pdf_path, pdf_name, '{}.csv'.format(input_file_name))
-        tabula.convert_into(
-            tabula_input_path,
-            output_path=tabula_output_path,
-            output_format='csv',
-            pages='all'
-        )
+        try:
+            tabula.convert_into(
+                tabula_input_path,
+                output_path=tabula_output_path,
+                output_format='csv',
+                pages='all'
+            )
+        except Exception as e:
+            raise OutputError('Tabula is not performing well...\n{}'.format(e))
 
     else:
         # something went wrong
         logger.error("Error while extracting pdf from {}".format(input_file))
         logger.error("Tesseract Output: {}".format(output))
-        logger.error("Tesseract Error: {}".format(outerr))
+        raise OutputError('Tesseract is not performing well...\n{}'
+                          .format("Tesseract Error: {}".format(outerr)))
 
 
 if __name__ == '__main__':

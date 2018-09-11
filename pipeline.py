@@ -2,6 +2,7 @@ from extract_pages_from_pdf import generate_pil_images_from_pdf
 from find_table import extract_tables_and_text, write_crops, create_temp_folders
 from tesseract_tabula_on_tables import do_tesseract_on_tables
 from tesseract_on_text import do_ocr_to_text
+from personal_errors import InputError, OutputError
 from costants import \
     INFERENCE_GRAPH, \
     TEST_PDF_PATH, \
@@ -26,9 +27,11 @@ fp = StringIO()
 def pipeline(pdf_path, inference_graph_path, thread_name=None):
     # if file.endswith(".jpeg"):
     path_to_pdf = os.path.join(pdf_path)
+    if not os.path.isfile(path_to_pdf):
+        raise InputError('{} not found'.format(path_to_pdf))
     # replace empty spaces with underscore to avoid problems while creating folders
     pdf_name = os.path.basename(path_to_pdf).split(os.extsep)[0].replace(" ", "_")
-    logger.info('Now elaborating: ' + str(pdf_name))
+    logger.info('Now elaborating: {}'.format(pdf_name))
     bw_pil_gen = generate_pil_images_from_pdf(
         file_path=path_to_pdf,
         temp_path=TEMP_IMG_FOLDER_FROM_PDF,
