@@ -199,8 +199,8 @@ def keep_best_not_overlapping_boxes(boxes, scores, max_num_boxes=5, min_score=0.
                         'x_max': kb[3]
                     }
                     intersected = check_if_intersected(
-                     coord_a=coord_b,
-                     coord_b=coord_kb
+                        coord_a=coord_b,
+                        coord_b=coord_kb
                     )
                 if not intersected:
                     kept_boxes.append(b)
@@ -460,7 +460,6 @@ def write_crops(file_name, cropped_tables=None, cropped_text=None, temp_table_pa
         logger.info('Writing cropped text done.')
         text_path = new_file_path
     return table_paths, text_path
-
 
 # def find_table(file_name, pil_image, create_temp_files=False, temp_table_path=TABLE_FOLDER, temp_text_path=TEXT_FOLDER):
 #     """

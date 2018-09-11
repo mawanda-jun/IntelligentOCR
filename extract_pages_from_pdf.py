@@ -24,6 +24,7 @@ import copy
 
 import logging
 from logger import TimeHandler
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.addHandler(TimeHandler().handler)
@@ -41,8 +42,8 @@ def clear_and_create_temp_folders(path_to_folder=PATH_TO_EXTRACTED_IMAGES):
         logger.info('Folder created successfully')
     except OSError as exc:  # Guard against race condition
         if exc.errno != errno.EEXIST:
-            message = '{path}\nwas not created correctly.'\
-                                       .format(path=path_to_folder)
+            message = '{path}\nwas not created correctly.' \
+                .format(path=path_to_folder)
             raise InputError(
                 message=message
             )
